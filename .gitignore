@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+*.log
+.env
+.env.*
+# Yerel veri klasörü (BELLEK_DATA_DIR ile proje içine alınırsa)
+/data

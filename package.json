@@ -1,0 +1,56 @@
+{
+  "name": "bellek-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bellek — hafızası olan yaratıcı stüdyo: kişi ve marka referanslarıyla görsel, video, metin ve sosyal medya içeriği üretimi.",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n sunucu,arayuz -c gray,blue \"tsx watch --clear-screen=false server/index.ts\" \"vite\"",
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "app": "node scripts/install-app.mjs",
+    "stop": "lsof -ti tcp:${PORT:-8787} | xargs kill"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@fal-ai/client": "^1.10.1",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@google/genai": "^3.3.0",
+    "@tanstack/react-query": "^5.107.1",
+    "archiver": "^8.0.0",
+    "express": "^5.3.0",
+    "lucide-react": "^1.72.0",
+    "multer": "^2.5.0",
+    "openai": "^7.56.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "react-router": "^7.18.5",
+    "remark-gfm": "^4.0.1",
+    "sharp": "^0.35.5",
+    "yauzl": "^3.4.0",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/archiver": "^8.0.0",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/yauzl": "^3.4.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "concurrently": "^10.0.7",
+    "playwright-core": "^1.65.0",
+    "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
