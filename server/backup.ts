@@ -8,8 +8,10 @@ import yauzl from 'yauzl';
 import type { BackupFile, BackupStatus } from '../shared/types.ts';
 import { APP_VERSION, DATA_DIR, paths } from './config.ts';
 import { closeDb, integrityCheck, openDb, schemaVersion, snapshotTo } from './db.ts';
+import { forgetAccessCache } from './access.ts';
 import { emit } from './events.ts';
 import { Invalid } from './repo/entities.ts';
+import { restoreAccounts, snapshotAccounts } from './repo/teams.ts';
 import { getSettings, readSetting, writeSetting } from './settings.ts';
 import { dirSize } from './storage.ts';
 
@@ -206,6 +208,9 @@ async function swapDatabase(source: string, reason: string): Promise<void> {
   // Önce şimdiki hâlin kopyasını al: geri yükleme de geri alınabilir olmalı.
   const safety = path.join(paths.backups, `bellek-${stamp()}-${reason}.db`);
   snapshotTo(safety);
+  // Hesaplar içerik değil erişimdir: eski bir yedek kimsenin şifresini geri almamalı,
+  // hesaplardan önceki bir yedek de stüdyoyu sahipsiz bırakmamalı.
+  const accounts = snapshotAccounts();
   closeDb();
   try {
     for (const suffix of ['', '-wal', '-shm']) await fsp.rm(paths.db + suffix, { force: true });
@@ -215,6 +220,8 @@ async function swapDatabase(source: string, reason: string): Promise<void> {
     throw error;
   } finally {
     openDb();
+    restoreAccounts(accounts);
+    forgetAccessCache();
     integrity = integrityCheck() ? 'ok' : 'error';
   }
 }

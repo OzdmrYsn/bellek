@@ -7,6 +7,7 @@ import { api } from '../lib/api.ts';
 import { cx, timeAgo } from '../lib/format.ts';
 import { useApp, useEntities, useMemories } from '../lib/queries.ts';
 import { attempt, toast } from '../lib/store.ts';
+import { useCan } from '../lib/auth.ts';
 import { Empty, IconButton, Spinner, Switch } from '../ui/kit.tsx';
 import { SuggestionDialog } from './SuggestionDialog.tsx';
 
@@ -14,6 +15,7 @@ const CATEGORY_LABEL = Object.fromEntries(MEMORY_CATEGORIES.map((c) => [c.id, c.
 
 function NoteRow({ note, showEntity }: { note: Memory; showEntity: boolean }) {
   const entities = useEntities();
+  const canDelete = useCan('memory.delete');
   const [text, setText] = useState(note.content);
   const [editing, setEditing] = useState(false);
   const entity = note.entityId ? entities.find((e) => e.id === note.entityId) : null;
@@ -71,7 +73,7 @@ function NoteRow({ note, showEntity }: { note: Memory; showEntity: boolean }) {
         >
           {note.pinned ? <Pin className="text-accent-text" /> : <PinOff />}
         </IconButton>
-        <IconButton
+        {canDelete && <IconButton
           label="Unut"
           size="sm"
           className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
@@ -86,7 +88,7 @@ function NoteRow({ note, showEntity }: { note: Memory; showEntity: boolean }) {
           }}
         >
           <Trash2 />
-        </IconButton>
+        </IconButton>}
         <Switch
           checked={note.enabled}
           label={note.enabled ? 'Kullanımda' : 'Devre dışı'}

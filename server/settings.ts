@@ -1,7 +1,8 @@
 import type {
   BudgetSettings, Defaults, ModelConfig, ModelKind, ModelPrice, ModelRef, ProviderInfo, ProviderKind, Settings,
-  UsageReport, UsageRow,
+  UsageMember, UsageReport, UsageRow,
 } from '../shared/types.ts';
+import { currentUserId } from './context.ts';
 import { all, get, newId, now, parseJson, run } from './db.ts';
 import { CATALOG } from './providers/catalog.ts';
 import { ProviderError } from './providers/types.ts';
@@ -311,9 +312,11 @@ export function removeModel(providerId: string, modelId: string): void {
 export function logUsage(entry: {
   provider: string; model: string; kind: string; inputTokens?: number; outputTokens?: number; units?: number;
 }): void {
+  // Kimin harcadığı, isteği başlatan üyenin bağlamından okunur.
   run(
-    `INSERT INTO usage_log (ts, provider, model, kind, input_tokens, output_tokens, units) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO usage_log (ts, provider, model, kind, input_tokens, output_tokens, units, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     now(), entry.provider, entry.model, entry.kind, entry.inputTokens ?? 0, entry.outputTokens ?? 0, entry.units ?? 0,
+    currentUserId(),
   );
 }
 
@@ -350,14 +353,20 @@ function monthStart(): string {
   return new Date(date.getFullYear(), date.getMonth(), 1).toISOString();
 }
 
-/** Bu ayın tahmini harcaması ve fiyatı bilinmediği için sayılamayan modeller. */
-export function monthSpend(): { spend: number; unpriced: string[] } {
+/** Bu ayın tahmini harcaması ve fiyatı bilinmediği için sayılamayan modeller. `userId` verilirse yalnızca o üyenin. */
+export function monthSpend(userId?: string): { spend: number; unpriced: string[] } {
   const prices = effectivePrices();
-  const rows = all<UsageAggregate>(
-    `SELECT provider, model, kind, COUNT(*) AS requests, SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
-            SUM(units) AS units FROM usage_log WHERE ts >= ? GROUP BY provider, model, kind`,
-    monthStart(),
-  );
+  const rows = userId
+    ? all<UsageAggregate>(
+        `SELECT provider, model, kind, COUNT(*) AS requests, SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+                SUM(units) AS units FROM usage_log WHERE ts >= ? AND user_id = ? GROUP BY provider, model, kind`,
+        monthStart(), userId,
+      )
+    : all<UsageAggregate>(
+        `SELECT provider, model, kind, COUNT(*) AS requests, SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+                SUM(units) AS units FROM usage_log WHERE ts >= ? GROUP BY provider, model, kind`,
+        monthStart(),
+      );
   let spend = 0;
   const unpriced = new Set<string>();
   for (const row of rows) {
@@ -378,13 +387,73 @@ export function usageReport(days: number): UsageReport {
     since,
   ).map((row) => ({ ...row, cost: costOf(row, prices[`${row.provider}:${row.model}`]) }));
   const month = monthSpend();
-  return { rows, monthSpend: month.spend, unpriced: month.unpriced, budget: getSettings().budget, prices };
+  return {
+    rows, monthSpend: month.spend, unpriced: month.unpriced, budget: getSettings().budget, prices,
+    members: memberUsage(since, prices),
+  };
+}
+
+/** Bir üyenin aylık kişisel sınırı; yoksa `null`. */
+export function memberLimit(userId: string): number | null {
+  const value = get<{ monthly_limit: number | null }>(`SELECT monthly_limit FROM users WHERE id = ?`, userId)?.monthly_limit;
+  return value === null || value === undefined ? null : Number(value);
+}
+
+/** Kim ne kadar harcadı: seçilen aralık ve bu ay, üye başına. Hesaplardan önceki kayıtlar `userId: null` altında toplanır. */
+function memberUsage(since: string, prices: Record<string, ModelPrice>): UsageMember[] {
+  type Grouped = UsageAggregate & { userId: string | null };
+  const sum = (from: string) => {
+    const totals = new Map<string, { requests: number; cost: number }>();
+    for (const row of all<Grouped>(
+      `SELECT user_id AS userId, provider, model, kind, COUNT(*) AS requests, SUM(input_tokens) AS inputTokens,
+              SUM(output_tokens) AS outputTokens, SUM(units) AS units
+         FROM usage_log WHERE ts >= ? GROUP BY user_id, provider, model, kind`,
+      from,
+    )) {
+      const key = row.userId ?? '';
+      const entry = totals.get(key) ?? { requests: 0, cost: 0 };
+      entry.requests += Number(row.requests);
+      entry.cost += costOf(row, prices[`${row.provider}:${row.model}`]) ?? 0;
+      totals.set(key, entry);
+    }
+    return totals;
+  };
+  const range = sum(since);
+  const month = sum(monthStart());
+  const limits = new Map(
+    all<{ id: string; monthly_limit: number | null }>(`SELECT id, monthly_limit FROM users`).map((row) => [row.id, row.monthly_limit]),
+  );
+  // Hiç harcaması olmayan üyeler de listede yer alır; sınırı oradan verilir.
+  const keys = new Set<string>([...range.keys(), ...month.keys(), ...limits.keys()]);
+  return [...keys]
+    .map((key) => {
+      const limit = limits.get(key);
+      return {
+        userId: key || null,
+        requests: range.get(key)?.requests ?? 0,
+        cost: range.get(key)?.cost ?? 0,
+        monthSpend: month.get(key)?.cost ?? 0,
+        limit: limit === null || limit === undefined ? null : Number(limit),
+      };
+    })
+    .sort((a, b) => b.monthSpend - a.monthSpend || b.cost - a.cost);
 }
 
 export class BudgetError extends ProviderError {}
 
-/** Aylık sınır aşıldıysa yeni üretimi durdurur. Sınır yoksa hiçbir şey yapmaz. */
+/** Takımın ya da isteği yapan üyenin aylık sınırı aşıldıysa yeni üretimi durdurur. Sınır yoksa hiçbir şey yapmaz. */
 export function assertBudget(): void {
+  const userId = currentUserId();
+  const personal = userId ? memberLimit(userId) : null;
+  if (userId && personal !== null) {
+    const mine = monthSpend(userId).spend;
+    if (mine >= personal) {
+      throw new BudgetError(
+        `Bu ayki tahmini harcamanız ${mine.toFixed(2)} $ ile size tanınan ${personal.toFixed(2)} $ sınırına ulaştı. ` +
+          'Sürdürmek için takım yöneticinizden sınırınızı yükseltmesini isteyin.',
+      );
+    }
+  }
   const limit = getSettings().budget.monthlyLimit;
   if (limit === null) return;
   const { spend } = monthSpend();

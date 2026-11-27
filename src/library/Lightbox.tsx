@@ -9,8 +9,9 @@ import { api } from '../lib/api.ts';
 import { bytes, copyText, cx, dateTime, duration } from '../lib/format.ts';
 import { useAsset, useEntities } from '../lib/queries.ts';
 import { toast, useUI } from '../lib/store.ts';
+import { useCan, useMember } from '../lib/auth.ts';
 import { Dialog } from '../ui/Dialog.tsx';
-import { Avatar, IconButton, Spinner } from '../ui/kit.tsx';
+import { Avatar, IconButton, Spinner, UserAvatar } from '../ui/kit.tsx';
 import { downloadAsset, patchAsset, toggleFavorite, trashAssets, useAssetActions } from './actions.ts';
 import { EntityPickerDialog } from './EntityPicker.tsx';
 import { MaskEditor } from './MaskEditor.tsx';
@@ -70,6 +71,7 @@ function TitleField({ asset }: { asset: Asset }) {
 
 export function Lightbox() {
   const state = useUI((s) => s.lightbox);
+  const canDelete = useCan('library.delete');
   const setIndex = useUI((s) => s.setLightboxIndex);
   const close = useUI((s) => s.closeLightbox);
   const openLightbox = useUI((s) => s.openLightbox);
@@ -85,6 +87,7 @@ export function Lightbox() {
   const toolJob = useUI((s) => (id && tools[id] ? s.jobs[tools[id]] : undefined));
   const working = toolJob?.status === 'queued' || toolJob?.status === 'running';
   const { data: asset, isLoading } = useAsset(id);
+  const author = useMember(asset?.userId);
   const count = state?.ids.length ?? 0;
 
   useEffect(() => {
@@ -223,6 +226,12 @@ export function Lightbox() {
                   <p className="note mt-0.5">
                     {SOURCE_LABEL[asset.source]} · {dateTime(asset.createdAt)}
                   </p>
+                  {author && (
+                    <p className="note mt-1.5 flex items-center gap-1.5">
+                      <UserAvatar user={author} size={16} />
+                      {author.name} {asset.source === 'generated' ? 'üretti' : 'ekledi'}
+                    </p>
+                  )}
                 </div>
                 <IconButton label="Kapat (Esc)" size="sm" className="max-md:hidden" onClick={close}>
                   <X />
@@ -246,7 +255,7 @@ export function Lightbox() {
                 )}
                 <Action icon={<Newspaper />} label="Gönderi yap" onClick={() => void act.toPost(asset)} />
                 {asset.prompt && <Action icon={<RotateCw />} label="İstemi kullan" onClick={() => act.reuse(asset)} />}
-                <Action icon={<Trash2 />} label="Çöpe taşı" danger onClick={() => void remove()} />
+                {canDelete && <Action icon={<Trash2 />} label="Çöpe taşı" danger onClick={() => void remove()} />}
               </div>
 
               <div className="flex flex-col gap-5 border-t border-line px-5 py-4">

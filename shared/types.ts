@@ -1,5 +1,7 @@
 // Sunucu ile arayüzün ortak sözleşmesi. API'den dönen her şey buradaki tiplerle konuşur.
 
+import type { Permission } from './permissions.ts';
+
 export type ID = string;
 
 // ───────────────────────── Medya ─────────────────────────
@@ -24,6 +26,8 @@ export interface Asset {
   params: Record<string, unknown> | null;
   parentId: ID | null;
   jobId: ID | null;
+  /** Dosyayı üreten ya da yükleyen üye; hesaplardan önceki kayıtlarda boş olabilir. */
+  userId: ID | null;
   favorite: boolean;
   tags: string[];
   createdAt: string;
@@ -184,6 +188,8 @@ export interface Conversation {
   pinned: boolean;
   /** Sohbete sabitlenen marka: her istekte bağlama eklenir. */
   brandId: ID | null;
+  /** Sohbeti başlatan üye. */
+  userId: ID | null;
   preview: string;
   createdAt: string;
   updatedAt: string;
@@ -499,6 +505,19 @@ export interface UsageReport {
   budget: BudgetSettings;
   /** Geçerli fiyatlar (katalog + kullanıcı). */
   prices: Record<string, ModelPrice>;
+  /** Kim ne kadar harcadı. */
+  members: UsageMember[];
+}
+
+export interface UsageMember {
+  /** `null`: hesaplar açılmadan önceki kayıtlar. */
+  userId: ID | null;
+  /** Seçilen aralıktaki istek sayısı ve tahmini tutar. */
+  requests: number;
+  cost: number;
+  /** Bu ayın tahmini harcaması ve varsa kişisel sınırı. */
+  monthSpend: number;
+  limit: number | null;
 }
 
 export interface ProviderInfo {
@@ -597,6 +616,10 @@ export interface Bootstrap {
   conversations: Conversation[];
   counts: { assets: number; entities: number; memories: number; posts: number; trash: number };
   backup: { lastBackupAt: string | null; integrity: BackupStatus['integrity'] };
+  me: Me;
+  team: { name: string; members: TeamMember[] };
+  /** Oturumdaki üyenin bu ayki tahmini harcaması ve kişisel sınırı. */
+  spend: { month: number; limit: number | null };
 }
 
 export interface UsageRow {
@@ -628,6 +651,67 @@ export interface SearchResult {
   subtitle: string;
   thumbUrl: string | null;
 }
+
+// ───────────────────────── Entegrasyonlar ─────────────────────────
+
+export type IntegrationType = 'webhook';
+
+export type IntegrationStatus = 'active' | 'inactive' | 'error';
+
+export interface WebhookConfig {
+  url: string;
+  secret?: string;
+  events: IntegrationEvent[];
+}
+
+export type IntegrationConfig = WebhookConfig;
+
+export type IntegrationEvent =
+  | 'post.created'
+  | 'post.updated'
+  | 'post.deleted'
+  | 'post.approved'
+  | 'post.changes-requested'
+  | 'job.completed'
+  | 'job.failed'
+  | 'asset.created'
+  | 'asset.deleted'
+  | 'entity.created'
+  | 'entity.updated';
+
+export interface Integration {
+  id: ID;
+  type: IntegrationType;
+  name: string;
+  config: IntegrationConfig;
+  status: IntegrationStatus;
+  lastError: string | null;
+  lastTriggeredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IntegrationInput {
+  type: IntegrationType;
+  name: string;
+  config: IntegrationConfig;
+}
+
+export interface IntegrationPatch {
+  name?: string;
+  config?: Partial<IntegrationConfig>;
+  status?: IntegrationStatus;
+}
+
+export interface IntegrationDelivery {
+  integrationId: ID;
+  event: IntegrationEvent;
+  status: 'sent' | 'failed';
+  error: string | null;
+  attemptedAt: string;
+}
+
+// ───────────────────────── Canlı olaylar (SSE) ─────────────────────────
 
 export interface NormalizedBox {
   /** Görsele göre 0–1 arası. */
@@ -676,4 +760,125 @@ export type ServerEvent =
   | { type: 'memory.changed' }
   | { type: 'entity.changed'; entityId: ID }
   | { type: 'asset.changed' }
+  | { type: 'integration.changed' }
+  | { type: 'team.changed' }
   | { type: 'backup.done'; at: string };
+
+// ───────────────────────── Hesaplar ve takım ─────────────────────────
+
+/** Sahip takımı kuran hesaptır ve her yetkiye sahiptir; üyelerin yetkileri tek tek verilir. */
+export type UserRole = 'owner' | 'member';
+
+/** Oturum açmış kullanıcının kendisi. */
+export interface Me {
+  id: ID;
+  email: string;
+  name: string;
+  avatarUrl: string | null;
+  role: UserRole;
+  /** Geçerli yetkiler; sahipte katalogdaki her şey. */
+  permissions: Permission[];
+  /** İlk girişteki ad ve profil resmi adımı tamamlandı mı. */
+  onboarded: boolean;
+  /** Şifreyi yönetici belirledi: üye kendi şifresini koymadan stüdyoya giremez. */
+  mustChangePassword: boolean;
+}
+
+/** Davet bağlantısının açtığı karşılama: kim, hangi takıma. */
+export interface InviteInfo {
+  teamName: string;
+  email: string;
+  name: string;
+}
+
+export interface AuthState {
+  /** Henüz hiç hesap yok: ilk hesap (takım sahibi) oluşturulmalı. */
+  setup: boolean;
+  /**
+   * İlk hesabın nereden açılabileceği. `open`: bu tarayıcıdan; `code`: kurulum
+   * koduyla (BELLEK_PASSWORD); `local-only`: yalnızca Bellek'in çalıştığı bilgisayardan.
+   */
+  setupMode: 'open' | 'code' | 'local-only';
+  user: Me | null;
+  teamName: string;
+}
+
+export interface SetupInput {
+  teamName: string;
+  name: string;
+  email: string;
+  password: string;
+  code?: string;
+}
+
+export interface LoginInput {
+  email: string;
+  password: string;
+}
+
+export interface TeamMember {
+  id: ID;
+  name: string;
+  avatarUrl: string | null;
+  role: UserRole;
+  // Aşağıdakiler yalnızca takımı yönetebilenlere gönderilir.
+  email?: string;
+  permissions?: Permission[];
+  onboarded?: boolean;
+  disabled?: boolean;
+  lastSeenAt?: string | null;
+  createdAt?: string;
+  /** Aylık kişisel harcama sınırı (ABD doları); `null` ise sınırsız. */
+  monthlyLimit?: number | null;
+  /** Henüz giriş yapmamış üyenin davet bağlantısının yolu (`/davet/…`). */
+  invitePath?: string | null;
+}
+
+export interface TeamAccess {
+  /** Sunucu yalnızca bu bilgisayardan erişilebilir durumda mı. */
+  local: boolean;
+  /** Takım arkadaşlarının girebileceği adresler. */
+  urls: string[];
+}
+
+export interface Team {
+  name: string;
+  members: TeamMember[];
+  access?: TeamAccess;
+}
+
+export interface MemberInput {
+  email: string;
+  password: string;
+  name?: string;
+  permissions: Permission[];
+  monthlyLimit?: number | null;
+}
+
+export interface MemberPatch {
+  name?: string;
+  email?: string;
+  permissions?: Permission[];
+  disabled?: boolean;
+  /** Verilirse şifre sıfırlanır, açık oturumları kapanır ve üye ilk girişte yeni şifre belirler. */
+  password?: string;
+  monthlyLimit?: number | null;
+}
+
+export interface SessionInfo {
+  id: ID;
+  current: boolean;
+  device: string;
+  ip: string;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+export interface ActivityEntry {
+  id: number;
+  at: string;
+  userId: ID | null;
+  userName: string;
+  action: string;
+  summary: string;
+}

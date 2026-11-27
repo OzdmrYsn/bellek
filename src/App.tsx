@@ -1,10 +1,11 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Suspense, lazy, useEffect, useState, type FormEvent } from 'react';
-import { Navigate, Route, Routes, matchPath, useLocation } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { Suspense, lazy, useEffect } from 'react';
+import { Navigate, Route, Routes, matchPath, useLocation, useNavigate } from 'react-router';
+import { InviteScreen, LoginScreen, SetupScreen, Splash, WelcomeScreen } from './auth/AuthScreens.tsx';
 import { PostEditorPage } from './content/PostEditor.tsx';
 import { PostsPage } from './content/PostsPage.tsx';
 import { ReviewPage } from './content/ReviewPage.tsx';
-import { api } from './lib/api.ts';
+import { authKey, useAuth } from './lib/auth.ts';
 import { useLive } from './lib/live.ts';
 import { useBootstrap } from './lib/queries.ts';
 import { applyTheme, useUI } from './lib/store.ts';
@@ -18,103 +19,59 @@ import { CommandPalette } from './shell/CommandPalette.tsx';
 import { Shell } from './shell/Shell.tsx';
 import { StudioPage } from './studio/StudioPage.tsx';
 import { ConfirmHost } from './ui/Dialog.tsx';
-import { Logo, PageLoader, Spinner, Toasts } from './ui/kit.tsx';
+import { PageLoader, Spinner, Toasts } from './ui/kit.tsx';
 
 const CalendarPage = lazy(() => import('./content/CalendarPage.tsx'));
 const DesignsPage = lazy(() => import('./design/DesignsPage.tsx'));
 const DesignEditorPage = lazy(() => import('./design/DesignEditor.tsx'));
 const SettingsPage = lazy(() => import('./settings/SettingsPage.tsx'));
 
-function Splash({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="grid h-full place-items-center px-6">
-      <div className="flex w-full max-w-sm flex-col items-center text-center">
-        <Logo size={44} />
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function Login({ onDone }: { onDone: () => void }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      await api.post('/api/auth', { password });
-      onDone();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Giriş yapılamadı.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Splash>
-      <h1 className="mt-5 text-xl font-semibold">Bellek</h1>
-      <p className="mt-1 text-[0.93rem] text-ink-2">Bu stüdyo parolayla korunuyor.</p>
-      <form onSubmit={submit} className="mt-6 flex w-full flex-col gap-3 text-left">
-        <input
-          type="password"
-          autoFocus
-          className="input"
-          placeholder="Parola"
-          aria-label="Parola"
-          aria-invalid={!!error}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-        {error && <p className="text-[0.85rem] text-danger">{error}</p>}
-        <button type="submit" className="btn btn-primary" disabled={busy || !password}>
-          {busy && <Spinner />} Giriş yap
-        </button>
-      </form>
-    </Splash>
-  );
-}
-
 /** Onay bağlantıları oturum ve uygulama verisi gerektirmez; kabuğun dışında açılır. */
 export function App() {
   const location = useLocation();
+  const navigate = useNavigate();
   const token = matchPath('/onay/:token', location.pathname)?.params.token;
   if (token) return <ReviewPage token={token} />;
+  // Davet bağlantısı: giriş yapılınca ana sayfaya dönülür, ilk giriş adımı oradan sürer.
+  const invite = matchPath('/davet/:token', location.pathname)?.params.token;
+  if (invite) return <InviteScreen token={invite} onDone={() => navigate('/', { replace: true })} />;
   return <Studio />;
 }
 
 function Studio() {
   const client = useQueryClient();
   const theme = useUI((state) => state.theme);
-  const auth = useQuery({
-    queryKey: ['auth'],
-    queryFn: () => api.get<{ required: boolean; ok: boolean }>('/api/auth'),
-    retry: 2,
-    staleTime: Infinity,
-  });
-  const allowed = !!auth.data && (!auth.data.required || auth.data.ok);
-  const boot = useBootstrap();
+  const auth = useAuth();
+  const user = auth.data?.user ?? null;
+  // Açılış verisi yalnızca oturum açık, ilk giriş adımı tamam ve şifre üyenin kendi şifresiyse istenir.
+  const pending = !!user && (!user.onboarded || user.mustChangePassword);
+  const allowed = !!user && !pending;
+  const boot = useBootstrap(allowed);
   useLive(allowed && !!boot.data);
 
   useEffect(() => applyTheme(theme), [theme]);
 
-  // Oturum sonradan düşerse giriş ekranına dön.
+  // Oturum sonradan düşerse (süresi doldu, hesap kapatıldı) giriş ekranına dön.
   useEffect(() => {
-    const onExpired = () => void client.invalidateQueries({ queryKey: ['auth'] });
+    const onExpired = () => void client.invalidateQueries({ queryKey: authKey });
     window.addEventListener('bellek:oturum', onExpired);
     return () => window.removeEventListener('bellek:oturum', onExpired);
   }, [client]);
 
-  if (auth.data?.required && !auth.data.ok) {
+  if (auth.data && !user) {
     return (
-      <Login
-        onDone={() => {
-          void client.invalidateQueries({ queryKey: ['auth'] });
-          void client.invalidateQueries({ queryKey: ['bootstrap'] });
-        }}
-      />
+      <>
+        {auth.data.setup ? <SetupScreen state={auth.data} /> : <LoginScreen state={auth.data} />}
+        <Toasts />
+      </>
+    );
+  }
+  if (auth.data && user && pending) {
+    return (
+      <>
+        <WelcomeScreen state={auth.data} />
+        <Toasts />
+      </>
     );
   }
 

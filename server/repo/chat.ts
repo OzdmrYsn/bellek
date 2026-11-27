@@ -3,6 +3,7 @@ import type {
   MessagePart, MessageStatus, Usage,
 } from '../../shared/types.ts';
 import { liveParts } from '../ai/live.ts';
+import { currentUserId } from '../context.ts';
 import { all, get, newId, now, parseJson, run, type Row } from '../db.ts';
 import { emit } from '../events.ts';
 import { getAssets } from '../storage.ts';
@@ -17,6 +18,7 @@ function toConversation(row: Row): Conversation {
     title: String(row.title ?? ''),
     pinned: !!row.pinned,
     brandId: (row.brand_id as string | null) ?? null,
+    userId: (row.user_id as string | null) ?? null,
     preview: String(row.preview ?? ''),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -30,7 +32,14 @@ const CONVERSATION_SELECT = `
      WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.seq DESC LIMIT 1
   ) AS preview FROM conversations c`;
 
-export function listConversations(limit = 200): Conversation[] {
+/** `ownerId` verilirse yalnızca o üyenin sohbetleri; `null` ise hepsi. */
+export function listConversations(ownerId: string | null = null, limit = 200): Conversation[] {
+  if (ownerId) {
+    return all<Row>(
+      `${CONVERSATION_SELECT} WHERE c.deleted_at IS NULL AND c.user_id = ? ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ?`,
+      ownerId, limit,
+    ).map(toConversation);
+  }
   return all<Row>(
     `${CONVERSATION_SELECT} WHERE c.deleted_at IS NULL ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ?`,
     limit,
@@ -42,12 +51,12 @@ export function getConversation(id: string): Conversation | undefined {
   return row ? toConversation(row) : undefined;
 }
 
-export function createConversation(input: { title?: string; brandId?: string | null } = {}): Conversation {
+export function createConversation(input: { title?: string; brandId?: string | null; userId?: string | null } = {}): Conversation {
   const id = newId('cv');
   const stamp = now();
   run(
-    `INSERT INTO conversations (id, title, brand_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-    id, input.title?.trim() ?? '', input.brandId ?? null, stamp, stamp,
+    `INSERT INTO conversations (id, title, brand_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    id, input.title?.trim() ?? '', input.brandId ?? null, input.userId ?? null, stamp, stamp,
   );
   const conversation = getConversation(id)!;
   emit({ type: 'conversation.updated', conversation });
@@ -224,10 +233,10 @@ export function insertJob(input: {
 }): Job {
   const id = newId('jb');
   run(
-    `INSERT INTO jobs (id, type, status, provider, model, model_label, input, conversation_id, message_id, post_id, stage, created_at)
-     VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, 'Sırada', ?)`,
+    `INSERT INTO jobs (id, type, status, provider, model, model_label, input, conversation_id, message_id, post_id, stage, created_at, user_id)
+     VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, 'Sırada', ?, ?)`,
     id, input.type, input.provider, input.model, input.modelLabel, JSON.stringify(input.input),
-    input.conversationId ?? null, input.messageId ?? null, input.postId ?? null, now(),
+    input.conversationId ?? null, input.messageId ?? null, input.postId ?? null, now(), currentUserId(),
   );
   const job = getJob(id)!;
   emit({ type: 'job.updated', job });

@@ -4,6 +4,7 @@ import type {
   ChatMode, Entity, Message, MessageOptions, MessagePart, MessageStatus, Usage,
 } from '../../shared/types.ts';
 import { emit } from '../events.ts';
+import { currentUserId, runAs } from '../context.ts';
 import { createGenerationJob } from '../jobs.ts';
 import { generateText } from '../providers/index.ts';
 import { ProviderError, isAbort, type ChatMessage, type ChatPart } from '../providers/types.ts';
@@ -39,6 +40,8 @@ interface TurnContext {
   attachments: string[];
   entities: Entity[];
   brand: Entity | null;
+  canRemember: boolean;
+  canPost: boolean;
 }
 
 /** Akan yanıtın parçalarını tutar, arayüze yayınlar ve aralıklarla diske yazar. */
@@ -220,6 +223,10 @@ function runAction(action: ParsedAction, state: TurnState, ctx: TurnContext): vo
       return;
     case 'post': {
       if (!generationAllowed) return;
+      if (!ctx.canPost) {
+        state.add({ type: 'notice', level: 'warn', text: 'Gönderi oluşturulmadı: bu hesapta içerik hazırlama yetkisi yok. Metni yukarıdan kopyalayabilirsiniz.' });
+        return;
+      }
       const caption = innerTag(action.body, 'caption')?.text ?? '';
       const image = innerTag(action.body, 'image_prompt');
       const platform = getPlatform(action.attrs.platform ?? 'instagram');
@@ -262,7 +269,7 @@ function runAction(action: ParsedAction, state: TurnState, ctx: TurnContext): vo
       return;
     }
     case 'remember': {
-      if (!getSettings().generation.autoMemory) return;
+      if (!getSettings().generation.autoMemory || !ctx.canRemember) return;
       const content = action.body.replace(/\s+/g, ' ').trim();
       if (!content) return;
       const folded = foldText(content);
@@ -410,9 +417,13 @@ export interface TurnInput {
   mode?: string;
   attachments?: string[];
   options?: MessageOptions;
+  /** İsteği yapan üye hafızaya yazabiliyor mu; yazamıyorsa sohbetten not çıkarılmaz. */
+  canRemember?: boolean;
+  /** İsteği yapan üye içerik hazırlayabiliyor mu; hazırlayamıyorsa sohbetten gönderi oluşturulmaz. */
+  canPost?: boolean;
 }
 
-function launch(conversationId: string, user: Message, assistant: Message, entities: Entity[]): void {
+function launch(conversationId: string, user: Message, assistant: Message, entities: Entity[], rights: { canRemember: boolean; canPost: boolean }): void {
   const conversation = getConversation(conversationId)!;
   const controller = new AbortController();
   turns.set(assistant.id, controller);
@@ -425,8 +436,12 @@ function launch(conversationId: string, user: Message, assistant: Message, entit
     attachments: user.attachments,
     entities,
     brand: activeBrand(conversation.brandId),
+    canRemember: rights.canRemember,
+    canPost: rights.canPost,
   };
-  void runTurn(ctx, controller.signal);
+  // Yanıt, istek bittikten sonra da onu başlatan üyenin adına sürer.
+  const userId = currentUserId();
+  void runAs(userId, () => runTurn(ctx, controller.signal));
 }
 
 export function startTurn(conversationId: string, input: TurnInput): { user: Message; assistant: Message } {
@@ -443,12 +458,12 @@ export function startTurn(conversationId: string, input: TurnInput): { user: Mes
   updateConversation(conversationId, { touch: true });
   emit({ type: 'message.updated', conversationId, message: user });
   emit({ type: 'message.updated', conversationId, message: assistant });
-  launch(conversationId, user, assistant, entities);
+  launch(conversationId, user, assistant, entities, { canRemember: input.canRemember !== false, canPost: input.canPost !== false });
   return { user, assistant };
 }
 
 /** Bir yanıtı ve ardından gelenleri silip aynı istekle yeniden üretir. */
-export function regenerateTurn(messageId: string): { assistant: Message } {
+export function regenerateTurn(messageId: string, options: { canRemember?: boolean; canPost?: boolean } = {}): { assistant: Message } {
   const target = getMessage(messageId);
   if (!target || target.role !== 'assistant') throw new NotFound('Yanıt bulunamadı.');
   const messages = listMessages(target.conversationId);
@@ -462,7 +477,9 @@ export function regenerateTurn(messageId: string): { assistant: Message } {
   });
   updateConversation(target.conversationId, { touch: true });
   emit({ type: 'message.updated', conversationId: target.conversationId, message: assistant });
-  launch(target.conversationId, user, assistant, getEntities(user.mentions.map((m) => m.entityId)));
+  launch(target.conversationId, user, assistant, getEntities(user.mentions.map((m) => m.entityId)), {
+    canRemember: options.canRemember !== false, canPost: options.canPost !== false,
+  });
   return { assistant };
 }
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { clampEdge, ratioOf } from '../shared/platforms.ts';
 import type { Entity, EntityAssetRole, Job, JobInput, JobOp, JobRef, JobType, MontageSpec } from '../shared/types.ts';
 import { paths } from './config.ts';
+import { runAs } from './context.ts';
 import { now, parseJson, type Row } from './db.ts';
 import { emit } from './events.ts';
 import { blendWithMask, fitImage, localUpscale, markupImage, maskFor } from './media/image.ts';
@@ -309,9 +310,14 @@ function fail(jobId: string, error: unknown): void {
   saveJob(jobId, { status: 'failed', stage: null, progress: null, error: message, finishedAt: now() });
 }
 
-async function execute(jobId: string): Promise<void> {
+/** Kuyruk kimin isteğiyle ilerlerse ilerlesin, iş onu başlatan üye adına çalışır: harcama ve çıktılar ona yazılır. */
+function execute(jobId: string): Promise<void> {
   const row = getJobRow(jobId);
-  if (!row || row.status !== 'queued') return;
+  if (!row || row.status !== 'queued') return Promise.resolve();
+  return runAs((row.user_id as string | null) ?? null, () => executeJob(jobId, row));
+}
+
+async function executeJob(jobId: string, row: Row): Promise<void> {
   const controller = new AbortController();
   controllers.set(jobId, controller);
   saveJob(jobId, { status: 'running', stage: 'Hazırlanıyor', startedAt: now() });
@@ -628,7 +634,7 @@ export function resumeJobs(): void {
       }
       const controller = new AbortController();
       controllers.set(jobId, controller);
-      void pollVideo(jobId, resolved, controller.signal).catch((error) => fail(jobId, error));
+      void runAs((row.user_id as string | null) ?? null, () => pollVideo(jobId, resolved, controller.signal)).catch((error) => fail(jobId, error));
       continue;
     }
     fail(jobId, new ProviderError('Sunucu yeniden başlatıldığı için bu üretim yarıda kaldı. Yeniden deneyebilirsiniz.'));

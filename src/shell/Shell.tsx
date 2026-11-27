@@ -1,16 +1,17 @@
 import {
-  Brain, CalendarDays, Images, LayoutTemplate, Menu as MenuIcon, MoreHorizontal, Moon, Newspaper, Pencil, Pin,
-  PinOff, Plus, Search, Settings, ShieldAlert, ShieldCheck, Sparkles, Sun, SunMoon, Trash2,
+  Brain, CalendarDays, ChevronsUpDown, Images, LayoutTemplate, LogOut, Menu as MenuIcon, MoreHorizontal, Moon, Newspaper,
+  Pencil, Pin, PinOff, Plus, Search, Settings, ShieldAlert, ShieldCheck, Sparkles, Sun, SunMoon, Trash2, UserRound, Users,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import type { Conversation } from '../../shared/types.ts';
 import { api } from '../lib/api.ts';
+import { signOut, useCan, useMe } from '../lib/auth.ts';
 import { cx, timeAgo } from '../lib/format.ts';
 import { refreshApp, useApp } from '../lib/queries.ts';
 import { attempt, toast, useUI, type Theme } from '../lib/store.ts';
 import { Dialog } from '../ui/Dialog.tsx';
-import { IconButton, Logo } from '../ui/kit.tsx';
+import { IconButton, Logo, UserAvatar } from '../ui/kit.tsx';
 import { Menu } from '../ui/Popover.tsx';
 
 const NAV = [
@@ -61,6 +62,7 @@ function RenameDialog({ conversation, onClose }: { conversation: Conversation | 
 
 function ConversationList({ onNavigate }: { onNavigate: () => void }) {
   const app = useApp();
+  const me = useMe();
   const navigate = useNavigate();
   const { id: activeId } = useParams();
   const [renaming, setRenaming] = useState<Conversation | null>(null);
@@ -78,10 +80,16 @@ function ConversationList({ onNavigate }: { onNavigate: () => void }) {
   if (!app.conversations.length) {
     return <p className="px-3 py-2 text-[0.84rem] leading-snug text-ink-3">Sohbetleriniz burada birikir; hiçbiri silinmez.</p>;
   }
+  const author = (conversation: Conversation) =>
+    conversation.userId && conversation.userId !== me.id ? app.team.members.find((member) => member.id === conversation.userId) : undefined;
   return (
     <>
       <ul className="flex flex-col gap-px">
-        {app.conversations.slice(0, 60).map((conversation) => (
+        {app.conversations.slice(0, 60).map((conversation) => {
+          const other = author(conversation);
+          // Başkasının sohbetini yalnızca takım sahibi yeniden adlandırır ya da siler.
+          const writable = !other || me.role === 'owner';
+          return (
           <li key={conversation.id} className="group relative">
             <NavLink
               to={`/c/${conversation.id}`}
@@ -92,12 +100,13 @@ function ConversationList({ onNavigate }: { onNavigate: () => void }) {
                   isActive ? 'bg-surface font-medium text-ink shadow-card' : 'text-ink-2 hover:bg-surface/70 hover:text-ink',
                 )
               }
-              title={`${conversation.title || 'Yeni sohbet'} · ${timeAgo(conversation.updatedAt)}`}
+              title={`${conversation.title || 'Yeni sohbet'} · ${other ? `${other.name} · ` : ''}${timeAgo(conversation.updatedAt)}`}
             >
+              {other && <UserAvatar user={other} size={18} />}
               {conversation.pinned && <Pin className="h-3 w-3 flex-none text-accent-text" />}
               <span className="truncate">{conversation.title || conversation.preview || 'Yeni sohbet'}</span>
             </NavLink>
-            <Menu
+            {writable && <Menu
               trigger={(props, open) => (
                 <button
                   type="button"
@@ -121,12 +130,48 @@ function ConversationList({ onNavigate }: { onNavigate: () => void }) {
                 'divider',
                 { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void remove(conversation) },
               ]}
-            />
+            />}
           </li>
-        ))}
+          );
+        })}
       </ul>
       <RenameDialog conversation={renaming} onClose={() => setRenaming(null)} />
     </>
+  );
+}
+
+/** Kenar çubuğunun altındaki hesap satırı: kim girmiş, hangi takımda; hesap ve çıkış menüsü. */
+function AccountMenu() {
+  const app = useApp();
+  const me = app.me;
+  const navigate = useNavigate();
+  return (
+    <Menu
+      placement="top-start"
+      trigger={(props, open) => (
+        <button
+          type="button"
+          {...props}
+          className={cx(
+            'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface/70',
+            open && 'bg-surface/70',
+          )}
+        >
+          <UserAvatar user={me} size={30} />
+          <span className="min-w-0 flex-1 leading-tight">
+            <span className="block truncate text-[0.9rem] font-medium">{me.name || me.email}</span>
+            <span className="block truncate text-[0.78rem] text-ink-3">{app.team.name || 'Takım'}</span>
+          </span>
+          <ChevronsUpDown className="h-3.5 w-3.5 flex-none text-ink-3" />
+        </button>
+      )}
+      items={[
+        { label: 'Hesabım', icon: <UserRound />, onSelect: () => navigate('/ayarlar/hesap') },
+        { label: 'Takım', icon: <Users />, onSelect: () => navigate('/ayarlar/takim') },
+        'divider',
+        { label: 'Çıkış yap', icon: <LogOut />, onSelect: () => void signOut() },
+      ]}
+    />
   );
 }
 
@@ -165,6 +210,8 @@ export function Shell() {
   const theme = useUI((state) => state.theme);
   const setTheme = useUI((state) => state.setTheme);
   const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : SunMoon;
+  const canGenerate = useCan('studio.generate');
+  const canManageData = useCan('data.manage');
 
   useEffect(() => setNavOpen(false), [location.pathname, setNavOpen]);
 
@@ -231,9 +278,11 @@ export function Shell() {
         <div className="mt-5 flex min-h-0 flex-1 flex-col">
           <div className="flex flex-none items-center justify-between pr-2.5 pb-1 pl-5.5">
             <span className="text-[0.8rem] font-medium text-ink-3">Sohbetler</span>
-            <IconButton label="Yeni sohbet" size="sm" onClick={() => navigate('/')}>
-              <Plus />
-            </IconButton>
+            {canGenerate && (
+              <IconButton label="Yeni sohbet" size="sm" onClick={() => navigate('/')}>
+                <Plus />
+              </IconButton>
+            )}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
             <ConversationList onNavigate={() => setNavOpen(false)} />
@@ -241,7 +290,8 @@ export function Shell() {
         </div>
 
         <div className="flex-none border-t border-line p-2.5">
-          <SafetyStatus />
+          <AccountMenu />
+          {canManageData && <SafetyStatus />}
           <div className="mt-0.5 flex items-center gap-1">
             <NavLink
               to="/ayarlar"

@@ -10,6 +10,7 @@ import { api } from '../lib/api.ts';
 import { cx } from '../lib/format.ts';
 import { keys, queryClient, refreshApp, useEntity } from '../lib/queries.ts';
 import { attempt, pickAssets, toast, useUI } from '../lib/store.ts';
+import { useCan } from '../lib/auth.ts';
 import { AssetTile } from '../library/AssetTile.tsx';
 import { ACCEPT_ATTR, filesFromDrop, hasFiles, mediaFiles, uploadFiles } from '../library/upload.ts';
 import { Avatar, Empty, IconButton, Notice, PageLoader, Spinner } from '../ui/kit.tsx';
@@ -208,6 +209,7 @@ function ReferenceGrid({ entity, onChange }: { entity: EntityDetail; onChange: (
 export function EntityPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const canDelete = useCan('memory.delete');
   const query = useEntity(id);
   const entity = query.data;
   const setPrefill = useUI((s) => s.setPrefill);
@@ -338,7 +340,7 @@ export function EntityPage() {
               items={[
                 { label: entity.pinned ? 'Sabitlemeyi kaldır' : 'Listenin başına sabitle', icon: entity.pinned ? <PinOff /> : <Pin />, onSelect: () => void patch({ pinned: !entity.pinned }) },
                 'divider',
-                { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void remove() },
+                { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void remove(), hidden: !canDelete },
               ]}
             />
           </div>

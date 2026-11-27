@@ -224,6 +224,77 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX reviews_post ON reviews(post_id);
   `,
+  // v3 — hesaplar, oturumlar, takım yetkileri ve etkinlik günlüğü.
+  // Tek bir çalışma alanı vardır: sahip takımı kurar, üyeleri e-posta ve şifreyle
+  // kendisi açar. Profil resmi yedeklerle birlikte taşınsın diye veritabanında durur.
+  `
+  CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'member',
+    permissions TEXT NOT NULL DEFAULT '[]',
+    password_hash TEXT NOT NULL,
+    avatar BLOB,
+    avatar_at TEXT,
+    onboarded_at TEXT,
+    disabled_at TEXT,
+    last_seen_at TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX users_email ON users(email);
+
+  CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    user_agent TEXT NOT NULL DEFAULT '',
+    ip TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX sessions_token ON sessions(token_hash);
+  CREATE INDEX sessions_user ON sessions(user_id);
+
+  CREATE TABLE activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    user_id TEXT,
+    user_name TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX activity_ts ON activity(ts);
+
+  ALTER TABLE conversations ADD COLUMN user_id TEXT;
+  CREATE INDEX conversations_user ON conversations(user_id);
+  `,
+  // v4 — davet bağlantısı ve ilk girişte yeni şifre, üye başına harcama sınırı,
+  // harcamanın, işlerin ve kütüphane dosyalarının kime ait olduğu.
+  `
+  ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE users ADD COLUMN invite_token TEXT;
+  ALTER TABLE users ADD COLUMN monthly_limit REAL;
+  CREATE UNIQUE INDEX users_invite ON users(invite_token) WHERE invite_token IS NOT NULL;
+
+  ALTER TABLE usage_log ADD COLUMN user_id TEXT;
+  CREATE INDEX usage_user ON usage_log(user_id, ts);
+  ALTER TABLE jobs ADD COLUMN user_id TEXT;
+  ALTER TABLE assets ADD COLUMN user_id TEXT;
+  CREATE INDEX assets_user ON assets(user_id);
+
+  -- Eski kayıtlar: sohbetten üretilenler sohbetin sahibine yazılır.
+  UPDATE jobs SET user_id = (SELECT c.user_id FROM conversations c WHERE c.id = jobs.conversation_id)
+   WHERE conversation_id IS NOT NULL;
+  UPDATE assets SET user_id = (SELECT j.user_id FROM jobs j WHERE j.id = assets.job_id) WHERE job_id IS NOT NULL;
+  -- Tek hesap varsa geri kalan her şey onundur. Hiç hesap yoksa kurulumda sahibe devredilir.
+  UPDATE jobs SET user_id = (SELECT id FROM users LIMIT 1) WHERE user_id IS NULL AND (SELECT COUNT(*) FROM users) = 1;
+  UPDATE assets SET user_id = (SELECT id FROM users LIMIT 1) WHERE user_id IS NULL AND (SELECT COUNT(*) FROM users) = 1;
+  UPDATE usage_log SET user_id = (SELECT id FROM users LIMIT 1) WHERE user_id IS NULL AND (SELECT COUNT(*) FROM users) = 1;
+  `,
 ];
 
 function handle(): DatabaseSync {

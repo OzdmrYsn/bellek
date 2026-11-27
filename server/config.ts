@@ -39,8 +39,21 @@ export const HOST = process.env.HOST || '127.0.0.1';
 export const IS_PROD = process.env.NODE_ENV === 'production';
 /** Anahtarsız uçtan uca deneme için sahte sağlayıcıyı açar. */
 export const MOCK = process.env.BELLEK_MOCK === '1';
-/** Ayarlanırsa arayüz ve API bu parolayla korunur (ağda paylaşım için). */
+/**
+ * Kurulum kodu. Hesaplar geldiğinden beri stüdyoyu e-posta ve şifre korur; bu
+ * değer yalnızca ilk hesabı (takım sahibini) başka bir bilgisayardan açarken sorulur.
+ */
 export const PASSWORD = process.env.BELLEK_PASSWORD || '';
+
+/** Sunucu yalnızca bu bilgisayardan mı erişilebilir. */
+export const LOOPBACK = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
+export const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/** `Host` başlığından portu ayıklar. */
+export function hostOnly(host: string | undefined): string {
+  if (!host) return '';
+  return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
+}
 
 export const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DIST_DIR = path.resolve(process.env.BELLEK_DIST_DIR || path.join(ROOT_DIR, 'dist'));

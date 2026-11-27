@@ -5,6 +5,8 @@ import { useState, type ReactNode } from 'react';
 import type { Asset } from '../../shared/types.ts';
 import { cx, duration } from '../lib/format.ts';
 import { useUI } from '../lib/store.ts';
+import { useCan } from '../lib/auth.ts';
+import { UserAvatar } from '../ui/kit.tsx';
 import { Menu } from '../ui/Popover.tsx';
 import { downloadAsset, ratioStyle, toggleFavorite, trashAssets, useAssetActions } from './actions.ts';
 import { EntityPickerDialog } from './EntityPicker.tsx';
@@ -22,6 +24,8 @@ interface AssetTileProps {
   actions?: boolean;
   caption?: ReactNode;
   className?: string;
+  /** Dosyayı üreten ya da yükleyen üye; verilirse karonun köşesinde küçük resmi görünür. */
+  author?: { name: string; avatarUrl: string | null };
 }
 
 function TileButton({ label, onClick, children, active }: { label: string; onClick: () => void; children: ReactNode; active?: boolean }) {
@@ -44,10 +48,11 @@ function TileButton({ label, onClick, children, active }: { label: string; onCli
   );
 }
 
-export function AssetTile({ asset, onOpen, natural, selectable, selected, onSelect, develop, actions = true, caption, className }: AssetTileProps) {
+export function AssetTile({ asset, onOpen, natural, selectable, selected, onSelect, develop, actions = true, caption, className, author }: AssetTileProps) {
   const act = useAssetActions();
   const [picking, setPicking] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const canDelete = useCan('library.delete');
   const isVideo = asset.kind === 'video';
 
   return (
@@ -108,6 +113,15 @@ export function AssetTile({ asset, onOpen, natural, selectable, selected, onSele
         </button>
       )}
 
+      {author && (
+        <span
+          className="pointer-events-none absolute right-1.5 bottom-1.5 rounded-full ring-2 ring-black/35 transition-opacity duration-150 group-focus-within:opacity-0 group-hover:opacity-0"
+          title={`${author.name} ${asset.source === 'generated' ? 'üretti' : 'ekledi'}`}
+        >
+          <UserAvatar user={author} size={20} />
+        </span>
+      )}
+
       {asset.favorite && !selectable && (
         <Heart className="pointer-events-none absolute top-2 right-2 h-4 w-4 fill-accent text-accent drop-shadow" />
       )}
@@ -159,7 +173,7 @@ export function AssetTile({ asset, onOpen, natural, selectable, selected, onSele
               { label: 'Gönderi oluştur', icon: <Newspaper />, onSelect: () => void act.toPost(asset) },
               { label: 'Tasarım editöründe aç', icon: <LayoutTemplate />, onSelect: () => void act.toDesign(asset), hidden: isVideo },
               'divider',
-              { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void trashAssets([asset.id]) },
+              { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void trashAssets([asset.id]), hidden: !canDelete },
             ]}
           />
         </div>
