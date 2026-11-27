@@ -1,25 +1,41 @@
 import {
   Archive, Bot, Database, Download, FolderOpen, Gauge, HardDriveDownload, RotateCcw, ShieldAlert, ShieldCheck,
-  SlidersHorizontal, Trash2, Upload,
+  SlidersHorizontal, Trash2, Upload, UserRound, Users,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, useParams } from 'react-router';
+import { can, type Permission } from '../../shared/permissions.ts';
 import { ASPECTS } from '../../shared/platforms.ts';
-import type { BackupStatus, ModelKind, Settings, TrashItem } from '../../shared/types.ts';
+import type { BackupStatus, ModelKind, Settings, TrashItem, UsageReport } from '../../shared/types.ts';
 import { api } from '../lib/api.ts';
 import { bytes, compact, cx, dateTime, timeAgo, usd } from '../lib/format.ts';
 import { keys, queryClient, refreshApp, useApp, useBackup, useTrash, useUsage } from '../lib/queries.ts';
 import { attempt, confirmDialog, toast, useUI, type Theme } from '../lib/store.ts';
-import { Empty, Notice, PageHeader, Segmented, SettingRow, Spinner, Switch } from '../ui/kit.tsx';
+import { Empty, Notice, PageHeader, Segmented, SettingRow, Spinner, Switch, UserAvatar } from '../ui/kit.tsx';
+import { useCan } from '../lib/auth.ts';
+import { AccountSection } from './Account.tsx';
 import { ProvidersSection } from './Providers.tsx';
+import { TeamSection } from './Team.tsx';
 
-const SECTIONS = [
-  { id: 'yapay-zeka', label: 'Yapay zekâlar', icon: Bot },
+/** `needs` verilen bölümler yalnızca o yetkiye sahip olanlara görünür. */
+const SECTIONS: { id: string; label: string; icon: typeof Bot; needs?: Permission }[] = [
+  { id: 'yapay-zeka', label: 'Yapay zekâlar', icon: Bot, needs: 'providers.view' },
   { id: 'genel', label: 'Genel', icon: SlidersHorizontal },
-  { id: 'veri', label: 'Veri ve yedekleme', icon: Database },
-  { id: 'cop', label: 'Çöp kutusu', icon: Trash2 },
-  { id: 'kullanim', label: 'Kullanım', icon: Gauge },
+  { id: 'takim', label: 'Takım', icon: Users },
+  { id: 'veri', label: 'Veri ve yedekleme', icon: Database, needs: 'data.manage' },
+  { id: 'cop', label: 'Çöp kutusu', icon: Trash2, needs: 'trash.manage' },
+  { id: 'kullanim', label: 'Kullanım', icon: Gauge, needs: 'usage.view' },
+  { id: 'hesap', label: 'Hesabım', icon: UserRound },
 ];
+
+/** İçindeki tüm denetimleri kilitler; yalnızca görüntüleme yetkisi olanlar için. */
+function Locked({ locked, children }: { locked: boolean; children: React.ReactNode }) {
+  return (
+    <fieldset disabled={locked} className={cx('m-0 min-w-0 border-0 p-0', locked && 'opacity-60')}>
+      {children}
+    </fieldset>
+  );
+}
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -61,6 +77,7 @@ function ModelDefault({ kind, slot, title, description }: { kind: ModelKind; slo
 
 function GeneralSection() {
   const app = useApp();
+  const editable = useCan('settings.manage');
   const theme = useUI((s) => s.theme);
   const setTheme = useUI((s) => s.setTheme);
   const generation = app.settings.generation;
@@ -84,6 +101,12 @@ function GeneralSection() {
         </SettingRow>
       </Group>
 
+      {!editable && (
+        <div className="mb-6">
+          <Notice>Aşağıdaki ayarlar tüm takım için geçerlidir; değiştirmek için “Genel ayarları değiştirebilir” yetkisi gerekir.</Notice>
+        </div>
+      )}
+      <Locked locked={!editable}>
       <Group title="Varsayılan modeller">
         <ModelDefault kind="text" slot="text" title="Metin ve yönetmen" description="Sohbeti yürütür, istemleri yazar, gönderileri hazırlar." />
         <ModelDefault kind="text" slot="utility" title="Hızlı işler" description="Sohbet başlığı ve etiket önerisi gibi küçük işler. Ekonomik bir model seçin." />
@@ -130,6 +153,7 @@ function GeneralSection() {
           />
         </div>
       </Group>
+      </Locked>
     </>
   );
 }
@@ -464,6 +488,79 @@ interface UsageLine {
   cost: number | null;
 }
 
+/** Kim ne kadar harcadı: bu ayın tutarı, kişisel sınır ve seçilen aralıktaki istekler. */
+function MemberUsage({ report, days }: { report: UsageReport; days: number }) {
+  const app = useApp();
+  const canManage = useCan('team.manage');
+  const rows = report.members.filter((row) => row.userId !== null || row.requests > 0 || row.monthSpend > 0);
+  // Tek kişilik takımda döküm takım toplamının aynısıdır; gösterilmez.
+  if (app.team.members.length < 2 && rows.length < 2) return null;
+
+  const setLimit = async (userId: string, value: number | null) => {
+    await attempt(() => api.patch(`/api/team/members/${userId}`, { monthlyLimit: value && value > 0 ? value : null }));
+    void queryClient.invalidateQueries({ queryKey: ['usage'] });
+    void queryClient.invalidateQueries({ queryKey: ['team'] });
+    void refreshApp();
+  };
+
+  return (
+    <section className="mb-8" aria-label="Üye başına harcama">
+      <h2 className="text-[1.08rem] font-semibold">Kim ne kadar harcadı</h2>
+      <p className="hint mt-0.5 max-w-[44rem]">
+        Her üretim onu başlatan üyeye yazılır. Kişisel sınırına ulaşan üyenin yeni üretimleri durur; diğerleri etkilenmez.
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-[36rem] border-collapse text-[0.9rem]">
+          <thead>
+            <tr className="border-b border-line text-left text-[0.8rem] text-ink-3">
+              <th className="py-2 pr-4 font-medium">Üye</th>
+              <th className="py-2 pr-4 font-medium">Bu ay</th>
+              <th className="py-2 pr-4 font-medium">Aylık sınır</th>
+              <th className="py-2 pr-4 text-right font-medium">Son {days} gün</th>
+              <th className="py-2 text-right font-medium">Tutar</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const member = row.userId ? app.team.members.find((item) => item.id === row.userId) : undefined;
+              const name = member?.name ?? (row.userId ? 'Ayrılan üye' : 'Hesaplardan önce');
+              const ratio = row.limit ? Math.min(1, row.monthSpend / row.limit) : 0;
+              const editable = canManage && !!member && member.role !== 'owner' && member.id !== app.me.id;
+              return (
+                <tr key={row.userId ?? 'eski'} className="border-b border-line align-middle">
+                  <td className="py-2.5 pr-4">
+                    <span className="flex items-center gap-2.5">
+                      {member ? <UserAvatar user={member} size={26} /> : <span className="h-[26px] w-[26px] flex-none rounded-full bg-sunken" />}
+                      <span className={cx('truncate', !member && 'text-ink-3')}>{name}</span>
+                    </span>
+                  </td>
+                  <td className="py-2.5 pr-4">
+                    <span className="tabular-nums">{usd(row.monthSpend)}</span>
+                    {row.limit !== null && (
+                      <span className="mt-1 block h-1 w-28 overflow-hidden rounded-full bg-sunken" role="meter" aria-label={`${name}: sınırın kullanılan kısmı`} aria-valuemin={0} aria-valuemax={row.limit} aria-valuenow={Math.min(row.monthSpend, row.limit)}>
+                        <span className={cx('block h-full rounded-full', ratio >= 1 ? 'bg-danger' : ratio >= 0.8 ? 'bg-warn' : 'bg-ink')} style={{ width: `${Math.max(ratio * 100, row.monthSpend > 0 ? 3 : 0)}%` }} />
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {editable ? (
+                      <AmountInput className="w-[8.5rem]" label={`${name}: aylık harcama sınırı (ABD doları)`} suffix="$ / ay" placeholder="Sınırsız" value={row.limit} onCommit={(value) => void setLimit(member.id, value)} />
+                    ) : (
+                      <span className="text-ink-2 tabular-nums">{row.limit !== null ? usd(row.limit) : member?.role === 'owner' ? 'Takım sınırı' : 'Sınırsız'}</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 pr-4 text-right text-ink-2 tabular-nums">{row.requests} istek</td>
+                  <td className="py-2.5 text-right tabular-nums">{usd(row.cost)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function UsageSection() {
   const app = useApp();
   const [days, setDays] = useState(30);
@@ -542,6 +639,8 @@ function UsageSection() {
         )}
       </section>
 
+      {report && <MemberUsage report={report} days={days} />}
+
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-[1.08rem] font-semibold">Model başına döküm</h2>
         <Segmented size="sm" value={String(days)} onChange={(value) => setDays(Number(value))} options={[{ value: '7', label: '7 gün' }, { value: '30', label: '30 gün' }, { value: '90', label: '90 gün' }]} />
@@ -614,15 +713,17 @@ function UsageSection() {
 }
 
 export default function SettingsPage() {
-  const { section = 'yapay-zeka' } = useParams();
+  const { section } = useParams();
   const app = useApp();
-  const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+  const sections = SECTIONS.filter((item) => !item.needs || can(app.me, item.needs));
+  const active = sections.find((s) => s.id === section) ?? sections[0];
+  const canManageProviders = useCan('providers.manage');
 
   return (
     <div className="flex h-full flex-col">
       <PageHeader title="Ayarlar" subtitle={`Bellek ${app.app.version}${app.app.mock ? ' · deneme sağlayıcısı açık' : ''}`}>
         <nav className="-mb-px flex gap-5 overflow-x-auto" aria-label="Ayar bölümleri">
-          {SECTIONS.map((item) => (
+          {sections.map((item) => (
             <NavLink
               key={item.id}
               to={`/ayarlar/${item.id}`}
@@ -640,8 +741,21 @@ export default function SettingsPage() {
       </PageHeader>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[56rem] px-6 py-7 max-md:px-4">
-          {active.id === 'yapay-zeka' && <ProvidersSection />}
+          {active.id === 'yapay-zeka' && (
+            <>
+              {!canManageProviders && (
+                <div className="mb-5">
+                  <Notice>Bağlı yapay zekâları görebilirsiniz; anahtar eklemek ya da değiştirmek için “API anahtarlarını yönetebilir” yetkisi gerekir.</Notice>
+                </div>
+              )}
+              <Locked locked={!canManageProviders}>
+                <ProvidersSection />
+              </Locked>
+            </>
+          )}
           {active.id === 'genel' && <GeneralSection />}
+          {active.id === 'takim' && <TeamSection />}
+          {active.id === 'hesap' && <AccountSection />}
           {active.id === 'veri' && <DataSection />}
           {active.id === 'cop' && <TrashSection />}
           {active.id === 'kullanim' && <UsageSection />}

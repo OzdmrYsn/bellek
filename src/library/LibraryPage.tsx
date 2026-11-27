@@ -5,6 +5,7 @@ import { api } from '../lib/api.ts';
 import { cx } from '../lib/format.ts';
 import { invalidateAssets, useApp, useAssets, type AssetFilter } from '../lib/queries.ts';
 import { attempt, toast, useUI } from '../lib/store.ts';
+import { can } from '../../shared/permissions.ts';
 import { Empty, PageHeader, PageLoader, Segmented, Spinner } from '../ui/kit.tsx';
 import { trashAssets } from './actions.ts';
 import { AssetTile } from './AssetTile.tsx';
@@ -58,6 +59,8 @@ export function LibraryPage() {
   const [params, setParams] = useSearchParams();
   const tab = (TABS.find((t) => t.value === params.get('tur'))?.value ?? 'all') as Tab;
   const entity = params.get('varlik') ?? '';
+  const member = params.get('uye') ?? '';
+  const team = app.team.members;
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -82,9 +85,10 @@ export function LibraryPage() {
       source: tab === 'uploaded' || tab === 'generated' ? tab : undefined,
       favorite: tab === 'favorite',
       entity: entity || undefined,
+      user: member || undefined,
       q: search || undefined,
     }),
-    [tab, entity, search],
+    [tab, entity, member, search],
   );
   const assets = useAssets(filter);
   const items = useMemo(() => assets.data?.pages.flatMap((page) => page.items) ?? [], [assets.data]);
@@ -155,7 +159,7 @@ export function LibraryPage() {
     setSelected([]);
   };
 
-  const filtered = tab !== 'all' || !!entity || !!search;
+  const filtered = tab !== 'all' || !!entity || !!member || !!search;
 
   return (
     <div
@@ -217,6 +221,21 @@ export function LibraryPage() {
               </option>
             ))}
           </select>
+          {team.length > 1 && (
+            <select
+              className="input !h-8 !w-auto max-w-44 !text-[0.86rem]"
+              value={member}
+              onChange={(event) => setParam('uye', event.target.value)}
+              aria-label="Üreten ya da yükleyen üyeye göre süz"
+            >
+              <option value="">Herkes</option>
+              {team.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.id === app.me.id ? `${item.name} (siz)` : item.name}
+                </option>
+              ))}
+            </select>
+          )}
           <div className="relative min-w-44 flex-1 sm:max-w-72">
             <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-ink-3" />
             <input
@@ -257,6 +276,7 @@ export function LibraryPage() {
                   asset={asset}
                   selectable
                   selected={selected.includes(asset.id)}
+                  author={team.length > 1 ? team.find((item) => item.id === asset.userId) : undefined}
                   onSelect={(shiftKey) => select(index, shiftKey)}
                   onOpen={() => openLightbox(items.map((a) => a.id), index)}
                 />
@@ -285,16 +305,18 @@ export function LibraryPage() {
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => void bulk('favorite')}>
               <Heart /> Favorile
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm !text-danger"
-              onClick={() => {
-                void trashAssets(selected);
-                setSelected([]);
-              }}
-            >
-              <Trash2 /> Sil
-            </button>
+            {can(app.me, 'library.delete') && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm !text-danger"
+                onClick={() => {
+                  void trashAssets(selected);
+                  setSelected([]);
+                }}
+              >
+                <Trash2 /> Sil
+              </button>
+            )}
             <button type="button" className="btn btn-ghost btn-icon btn-sm" aria-label="Seçimi temizle" onClick={() => setSelected([])}>
               <X />
             </button>

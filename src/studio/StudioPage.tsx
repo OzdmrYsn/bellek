@@ -6,7 +6,8 @@ import { api } from '../lib/api.ts';
 import { cx } from '../lib/format.ts';
 import { keys, queryClient, refreshApp, useApp, useConversation } from '../lib/queries.ts';
 import { attempt, toast, useUI } from '../lib/store.ts';
-import { Avatar, Empty, IconButton, PageLoader } from '../ui/kit.tsx';
+import { can } from '../../shared/permissions.ts';
+import { Avatar, Empty, IconButton, Notice, PageLoader } from '../ui/kit.tsx';
 import { Menu, Popover } from '../ui/Popover.tsx';
 import { Composer, type SendPayload } from './Composer.tsx';
 import { MessageView } from './MessageView.tsx';
@@ -86,11 +87,13 @@ function Welcome({ onSend }: { onSend: (payload: SendPayload) => Promise<boolean
   const hasModel = app.models.length > 0;
   const hasPerson = app.entities.some((e) => e.type === 'person');
   const hasBrand = app.entities.some((e) => e.type === 'brand');
+  const canGenerate = can(app.me, 'studio.generate');
+  // Kurulum adımları yalnızca o adımı atabilecek kişiye gösterilir.
   const steps = [
-    { done: hasModel, title: 'Yapay zekânı bağla', body: 'Claude, OpenAI, Gemini ya da fal.ai anahtarını ekle.', to: '/ayarlar' },
-    { done: hasPerson, title: 'İlk kişini ekle', body: 'Birkaç fotoğraf yükle, @ad ile çağır.', to: '/hafiza?yeni=person' },
-    { done: hasBrand, title: 'Markanı tanıt', body: 'Logo, renkler ve ses tonu bir kez girilir.', to: '/hafiza?yeni=brand' },
-  ];
+    { done: hasModel, title: 'Yapay zekânı bağla', body: 'Claude, OpenAI, Gemini ya da fal.ai anahtarını ekle.', to: '/ayarlar', shown: can(app.me, 'providers.manage') },
+    { done: hasPerson, title: 'İlk kişini ekle', body: 'Birkaç fotoğraf yükle, @ad ile çağır.', to: '/hafiza?yeni=person', shown: can(app.me, 'memory.edit') },
+    { done: hasBrand, title: 'Markanı tanıt', body: 'Logo, renkler ve ses tonu bir kez girilir.', to: '/hafiza?yeni=brand', shown: can(app.me, 'memory.edit') },
+  ].filter((step) => step.shown);
   const ready = steps.every((s) => s.done);
   const ideas = useMemo(() => starters(app.entities), [app.entities]);
 
@@ -107,7 +110,13 @@ function Welcome({ onSend }: { onSend: (payload: SendPayload) => Promise<boolean
         </p>
 
         <div className="mt-7">
-          <Composer draftKey="new" onSend={onSend} autoFocus />
+          {canGenerate ? (
+            <Composer draftKey="new" onSend={onSend} autoFocus />
+          ) : (
+            <Notice>
+              Bu hesapta üretim yetkisi yok. Hafızayı, kütüphaneyi ve içerikleri görüntüleyebilirsiniz; üretim için takım yöneticinizden yetki isteyin.
+            </Notice>
+          )}
         </div>
 
         {!ready && (
@@ -268,6 +277,12 @@ export function StudioPage() {
     );
   }
 
+  // Başkasının sohbeti salt okunurdur; yalnızca takım sahibi yazabilir.
+  const foreign = !!detail.userId && detail.userId !== app.me.id;
+  const writable = !foreign || app.me.role === 'owner';
+  const author = foreign ? app.team.members.find((member) => member.id === detail.userId) : undefined;
+  const canGenerate = can(app.me, 'studio.generate');
+
   const streaming = [...detail.messages].reverse().find((m) => m.role === 'assistant' && m.status === 'streaming');
   const lastAssistant = [...detail.messages].reverse().find((m) => m.role === 'assistant');
 
@@ -285,12 +300,13 @@ export function StudioPage() {
     <div className="flex h-full flex-col">
       <header className="flex h-14 flex-none items-center gap-2 border-b border-line px-6 max-md:px-4">
         <h1 className="min-w-0 flex-1 truncate text-[1rem] font-semibold">{detail.title || 'Yeni sohbet'}</h1>
-        <BrandContext
+        {foreign && <span className="badge flex-none">{author?.name ?? 'Başka bir üye'}</span>}
+        {writable && <BrandContext
           brand={brand}
           brands={brands}
           onChange={(brandId) => void attempt(() => api.patch(`/api/conversations/${detail.id}`, { brandId }))}
-        />
-        <Menu
+        />}
+        {writable && <Menu
           trigger={(props) => (
             <IconButton label="Sohbet seçenekleri" size="sm" {...props}>
               <MoreHorizontal />
@@ -305,7 +321,7 @@ export function StudioPage() {
             'divider',
             { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void remove() },
           ]}
-        />
+        />}
       </header>
 
       <div ref={scroller} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto">
@@ -318,6 +334,7 @@ export function StudioPage() {
               posts={detail.posts}
               isLast={message.id === lastAssistant?.id}
               onRegenerate={regenerate}
+              readOnly={!writable || !canGenerate}
             />
           ))}
         </div>
@@ -338,7 +355,13 @@ export function StudioPage() {
           </button>
         )}
         <div className="mx-auto w-full max-w-[50rem] px-6 max-md:px-3">
-          <Composer draftKey={detail.id} onSend={send} streamingId={streaming?.id ?? null} autoFocus />
+          {!writable ? (
+            <Notice>Bu sohbet {author?.name ?? 'başka bir üye'} adlı üyeye ait; yalnızca görüntülüyorsunuz.</Notice>
+          ) : !canGenerate ? (
+            <Notice>Bu hesapta üretim yetkisi yok; sohbeti yalnızca görüntüleyebilirsiniz.</Notice>
+          ) : (
+            <Composer draftKey={detail.id} onSend={send} streamingId={streaming?.id ?? null} autoFocus />
+          )}
         </div>
       </div>
     </div>

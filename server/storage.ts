@@ -6,6 +6,7 @@ import path from 'node:path';
 import sharp, { type Metadata } from 'sharp';
 import type { Asset, AssetKind, AssetSource } from '../shared/types.ts';
 import { paths } from './config.ts';
+import { currentUserId } from './context.ts';
 import { all, get, newId, now, parseJson, run, tx, type Row } from './db.ts';
 
 // Medya dosyaları içeriğe göre adreslenir (sha256) ve bir kez yazılır; var olan
@@ -178,6 +179,8 @@ export interface IngestInput {
   params?: Record<string, unknown> | null;
   parentId?: string | null;
   jobId?: string | null;
+  /** Ekleyen üye; verilmezse isteğin bağlamından okunur. */
+  userId?: string | null;
 }
 
 /** Bir dosyayı kütüphaneye alır. Aynı içerik daha önce yüklenmişse o kayıt döner. */
@@ -267,12 +270,13 @@ export async function ingest(input: IngestInput): Promise<Asset> {
     const baseName = path.basename(input.filename).replace(/\.[^.]+$/, '') || 'dosya';
     run(
       `INSERT INTO assets (id, kind, source, filename, mime, size, width, height, duration, sha256, path, thumb,
-         title, prompt, model, provider, params, parent_id, job_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         title, prompt, model, provider, params, parent_id, job_id, created_at, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, kind, input.source, `${baseName}.${ext}`, mime, size, width, height, duration, sha,
       path.join(sha.slice(0, 2), `${sha}.${ext}`), thumb,
       input.title ?? null, input.prompt ?? null, input.model ?? null, input.provider ?? null,
       input.params ? JSON.stringify(input.params) : null, input.parentId ?? null, input.jobId ?? null, now(),
+      input.userId ?? currentUserId(),
     );
     return getAsset(id)!;
   } finally {
@@ -333,6 +337,7 @@ function toAsset(row: Row, entityIds: string[]): Asset {
     params: parseJson<Record<string, unknown> | null>(row.params, null),
     parentId: (row.parent_id as string | null) ?? null,
     jobId: (row.job_id as string | null) ?? null,
+    userId: (row.user_id as string | null) ?? null,
     favorite: !!row.favorite,
     tags: parseJson<string[]>(row.tags, []),
     createdAt: String(row.created_at),

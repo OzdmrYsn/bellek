@@ -8,6 +8,7 @@ import type { Entity, Message, MessagePart, Post } from '../../shared/types.ts';
 import { api } from '../lib/api.ts';
 import { copyText, cx, timeAgo } from '../lib/format.ts';
 import { attempt, toast, useUI } from '../lib/store.ts';
+import { useCan } from '../lib/auth.ts';
 import { MentionTag, Notice, Spinner } from '../ui/kit.tsx';
 import { JobCard } from './JobCard.tsx';
 import { PlanList, PostCard } from './PostCard.tsx';
@@ -77,6 +78,7 @@ function groupParts(parts: MessagePart[]): Group[] {
 }
 
 function MemoryChip({ part }: { part: Extract<MessagePart, { type: 'memory' }> }) {
+  const canForget = useCan('memory.delete');
   return (
     <div className="flex max-w-[38rem] items-start gap-2.5 rounded-xl bg-accent-soft px-3.5 py-2.5 text-[0.88rem] text-accent-text">
       <Brain className="mt-0.5 h-4 w-4 flex-none" />
@@ -84,21 +86,25 @@ function MemoryChip({ part }: { part: Extract<MessagePart, { type: 'memory' }> }
         <span className="font-semibold">Hafızaya alındı: </span>
         {part.content}
       </p>
-      <button
-        type="button"
-        className="flex flex-none items-center gap-1 text-[0.82rem] underline underline-offset-2 hover:no-underline"
-        onClick={async () => {
-          const ok = await attempt(() => api.del(`/api/memories/${part.memoryId}`));
-          if (ok) toast('Not hafızadan çıkarıldı.');
-        }}
-      >
-        <Undo2 className="h-3.5 w-3.5" /> Unut
-      </button>
+      {canForget && (
+        <button
+          type="button"
+          className="flex flex-none items-center gap-1 text-[0.82rem] underline underline-offset-2 hover:no-underline"
+          onClick={async () => {
+            const ok = await attempt(() => api.del(`/api/memories/${part.memoryId}`));
+            if (ok) toast('Not hafızadan çıkarıldı.');
+          }}
+        >
+          <Undo2 className="h-3.5 w-3.5" /> Unut
+        </button>
+      )}
     </div>
   );
 }
 
 interface MessageViewProps {
+  /** Salt okunur sohbette (başkasının sohbeti ya da üretim yetkisi yok) "yeniden üret" gizlenir. */
+  readOnly?: boolean;
   message: Message;
   entities: Entity[];
   posts: Post[];
@@ -106,7 +112,7 @@ interface MessageViewProps {
   onRegenerate: (messageId: string) => void;
 }
 
-export const MessageView = memo(function MessageView({ message, entities, posts, isLast, onRegenerate }: MessageViewProps) {
+export const MessageView = memo(function MessageView({ message, entities, posts, isLast, onRegenerate, readOnly }: MessageViewProps) {
   const openLightbox = useUI((s) => s.openLightbox);
   const pending = useUI((s) => s.pending[message.id]);
   const groups = useMemo(() => groupParts(message.parts), [message.parts]);
@@ -220,7 +226,7 @@ export const MessageView = memo(function MessageView({ message, entities, posts,
               <Copy />
             </button>
           )}
-          {isLast && (
+          {isLast && !readOnly && (
             <button
               type="button"
               className="btn btn-ghost btn-icon btn-sm"

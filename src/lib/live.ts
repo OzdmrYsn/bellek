@@ -165,6 +165,12 @@ function handle(event: ServerEvent): void {
       );
       void queryClient.invalidateQueries({ queryKey: keys.backup });
       return;
+    case 'team.changed':
+      // Üyeler ya da yetkiler değişti: kendi yetkilerimiz de değişmiş olabilir.
+      void queryClient.invalidateQueries({ queryKey: ['auth'] });
+      void queryClient.invalidateQueries({ queryKey: ['team'] });
+      appChanged();
+      return;
     case 'hello':
       return;
   }

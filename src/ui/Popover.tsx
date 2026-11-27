@@ -98,6 +98,9 @@ export function Popover({ trigger, children, placement = 'bottom-start', classNa
   }, [open, close, position]);
 
   const host = (open && anchor.current?.closest('dialog')) || document.body;
+  // Kenar çubuğu kendi katmanını kurar (çekmece olarak açıldığında içeriğin üstünde durur);
+  // içinden açılan menü onun da üstüne çıkmazsa arkasında kalır ve görünmez.
+  const layer = open && anchor.current?.closest('aside') ? 'calc(var(--z-modal) + 1)' : 'var(--z-dropdown)';
 
   return (
     <>
@@ -120,7 +123,7 @@ export function Popover({ trigger, children, placement = 'bottom-start', classNa
           <div
             ref={panel}
             role="dialog"
-            style={{ position: 'fixed', zIndex: 'var(--z-dropdown)', ...style }}
+            style={{ position: 'fixed', zIndex: layer, ...style }}
             className={cx('pop animate-rise origin-top p-1.5', className)}
             onClick={(event) => event.stopPropagation()}
           >
@@ -146,7 +149,10 @@ interface MenuProps {
   placement?: Placement;
 }
 
-export function Menu({ trigger, items, placement = 'bottom-end' }: MenuProps) {
+export function Menu({ trigger, items: all, placement = 'bottom-end' }: MenuProps) {
+  const shown = all.filter((item) => item === 'divider' || !item.hidden);
+  const items = shown.filter((item, index) => item !== 'divider' || (index > 0 && index < shown.length - 1 && shown[index - 1] !== 'divider'));
+  while (items[items.length - 1] === 'divider') items.pop();
   return (
     <Popover trigger={trigger} placement={placement} className="min-w-44">
       {(close) => (
@@ -154,7 +160,7 @@ export function Menu({ trigger, items, placement = 'bottom-end' }: MenuProps) {
           {items.map((item, index) =>
             item === 'divider' ? (
               <div key={`d${index}`} className="my-1 border-t border-line" />
-            ) : item.hidden ? null : (
+            ) : (
               <button
                 key={item.label}
                 type="button"

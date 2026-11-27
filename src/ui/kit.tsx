@@ -173,6 +173,31 @@ export function Avatar({ entity, size = 28, className }: { entity: Pick<Entity, 
   );
 }
 
+/** Takım üyesinin yuvarlak profil resmi; resim yoksa adının baş harfleri. */
+export function UserAvatar({ user, size = 28, className }: { user: { name: string; avatarUrl: string | null }; size?: number; className?: string }) {
+  if (user.avatarUrl) {
+    return (
+      <img
+        src={user.avatarUrl}
+        alt=""
+        width={size}
+        height={size}
+        style={{ width: size, height: size }}
+        className={cx('flex-none rounded-full bg-sunken object-cover', className)}
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden="true"
+      style={{ width: size, height: size, fontSize: Math.max(10, size * 0.38) }}
+      className={cx('grid flex-none place-items-center rounded-full bg-ink font-semibold text-bg', className)}
+    >
+      {initials(user.name) || '·'}
+    </span>
+  );
+}
+
 export function MentionTag({ handle }: { handle: string }) {
   return <span className="mention">@{handle}</span>;
 }

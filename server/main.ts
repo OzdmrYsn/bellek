@@ -1,9 +1,12 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import './access.ts';
+import { Forbidden, TooMany, Unauthorized, pruneSessions } from './auth.ts';
 import { startBackupScheduler } from './backup.ts';
-import { APP_NAME, DATA_DIR, DIST_DIR, HOST, IS_PROD, MOCK, PASSWORD, PORT } from './config.ts';
+import {
+  APP_NAME, DATA_DIR, DIST_DIR, HOST, IS_PROD, LOCAL_HOSTS, LOOPBACK, MOCK, PASSWORD, PORT, hostOnly,
+} from './config.ts';
 import { prepareLocalVision } from './media/people.ts';
 import { closeDb, openDb } from './db.ts';
 import { resumeJobs } from './jobs.ts';
@@ -17,10 +20,16 @@ import {
   reviewRouter,
 } from './routes/studio.ts';
 import { systemRouter } from './routes/system.ts';
+import { integrationsRouter } from './routes/integrations.ts';
+import { teamsRouter } from './routes/teams.ts';
+import { accountRouter, avatarRouter, publicAuthRouter } from './routes/auth.ts';
+import { authenticate, need } from './middleware/auth.ts';
+import { countUsers } from './repo/teams.ts';
 import { UploadError, clearTmp } from './storage.ts';
 
 const opened = openDb();
 closeDanglingMessages();
+pruneSessions();
 await clearTmp();
 
 const app = express();
@@ -28,18 +37,12 @@ app.disable('x-powered-by');
 
 // ───────────────────────── Güvenlik ─────────────────────────
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
-const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
-
-function hostname(host: string | undefined): string {
-  if (!host) return '';
-  return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
-}
+const loopback = LOOPBACK;
 
 app.use((req, res, next) => {
   // Yalnızca bu makineden erişime açıkken yabancı bir alan adı üzerinden gelen
   // istekleri (DNS yeniden bağlama) reddet.
-  if (loopback && !LOCAL_HOSTS.has(hostname(req.headers.host))) {
+  if (loopback && !LOCAL_HOSTS.has(hostOnly(req.headers.host))) {
     return res.status(403).json({ error: 'Bu adres üzerinden erişime izin verilmiyor.' });
   }
   // Başka bir sitenin, tarayıcı üzerinden bu sunucuya yazma isteği göndermesini engelle.
@@ -60,36 +63,18 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '25mb' }));
 
-const sessionToken = PASSWORD ? crypto.createHmac('sha256', PASSWORD).update('bellek-oturum-v1').digest('hex') : '';
-
-function hasSession(req: Request): boolean {
-  if (!PASSWORD) return true;
-  const cookie = (req.headers.cookie ?? '').split(';').map((c) => c.trim()).find((c) => c.startsWith('bellek_oturum='));
-  const value = cookie?.slice('bellek_oturum='.length) ?? '';
-  return value.length === sessionToken.length && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(sessionToken));
-}
-
-app.get('/api/auth', (req, res) => {
-  res.json({ required: !!PASSWORD, ok: hasSession(req) });
-});
-
-app.post('/api/auth', (req, res) => {
-  const given = String((req.body as { password?: string })?.password ?? '');
-  const a = crypto.createHash('sha256').update(given).digest();
-  const b = crypto.createHash('sha256').update(PASSWORD).digest();
-  if (!PASSWORD || !crypto.timingSafeEqual(a, b)) {
-    return res.status(401).json({ error: 'Parola yanlış.' });
-  }
-  res.setHeader('Set-Cookie', `bellek_oturum=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}`);
-  res.json({ ok: true });
-});
-
-// Onay bağlantıları parola istemez: belirteç tek bir gönderiye erişim verir, başka hiçbir şeye.
+// Onay bağlantıları hesap istemez: belirteç tek bir gönderiye erişim verir, başka hiçbir şeye.
 app.use('/api/review', reviewRouter);
 
+// Durum, ilk kurulum, giriş ve çıkış oturumsuz çalışır; bundan sonraki her uç oturum ister.
+app.use('/api/auth', publicAuthRouter);
+app.use(['/api', '/media'], authenticate);
+
+// Şifresini yönetici belirlemiş üye, kendi şifresini koyana kadar yalnızca hesap uçlarına erişir.
 app.use(['/api', '/media'], (req, res, next) => {
-  if (hasSession(req)) return next();
-  res.status(401).json({ error: 'Oturum açmanız gerekiyor.' });
+  if (!req.actor?.mustChangePassword) return next();
+  if (req.originalUrl.startsWith('/api/auth/') || req.originalUrl.startsWith('/api/avatars/')) return next();
+  res.status(403).json({ error: 'Devam etmeden önce kendi şifrenizi belirleyin.' });
 });
 
 // ───────────────────────── Uçlar ─────────────────────────
@@ -105,6 +90,10 @@ app.use('/api/generate', generateRouter);
 app.use('/api/posts', postRouter);
 app.use('/api/campaigns', campaignRouter);
 app.use('/api/designs', designRouter);
+app.use('/api/integrations', need('settings.manage'), integrationsRouter);
+app.use('/api/auth', accountRouter);
+app.use('/api/avatars', avatarRouter);
+app.use('/api/team', teamsRouter);
 app.use('/api', systemRouter);
 
 app.use('/api', (_req, res) => {
@@ -126,6 +115,9 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return;
   const message = error instanceof Error ? error.message : 'Beklenmeyen bir hata oluştu.';
   if (error instanceof NotFound) return res.status(404).json({ error: message });
+  if (error instanceof Unauthorized) return res.status(401).json({ error: message });
+  if (error instanceof Forbidden) return res.status(403).json({ error: message });
+  if (error instanceof TooMany) return res.status(429).json({ error: message });
   if (error instanceof Invalid || error instanceof UploadError) return res.status(400).json({ error: message });
   if (error instanceof ProviderError) return res.status(422).json({ error: message });
   const anyError = error as { code?: string; type?: string; status?: number };
@@ -151,7 +143,10 @@ const server = app.listen(PORT, HOST, () => {
   if (opened.created) console.log('  Yeni bir hafıza oluşturuldu.');
   if (opened.migratedFrom !== null) console.log(`  Veritabanı güncellendi (sürüm ${opened.migratedFrom} → yeni); öncesi yedeklendi.`);
   if (MOCK) console.log('  Deneme sağlayıcısı açık (BELLEK_MOCK=1).');
-  if (!loopback && !PASSWORD) console.log('  UYARI: Sunucu ağa açık ama parola yok. BELLEK_PASSWORD ayarlayın.');
+  if (countUsers() === 0) {
+    console.log('  Henüz hesap yok: tarayıcıda açıp takım sahibi hesabını oluşturun.');
+    if (!loopback && !PASSWORD) console.log('  Sunucu ağa açık; ilk hesap yalnızca bu bilgisayardan (localhost) oluşturulabilir.');
+  }
   console.log('');
   startBackupScheduler();
   resumeJobs();

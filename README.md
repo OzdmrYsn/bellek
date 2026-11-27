@@ -79,13 +79,27 @@ Hazır katalogda 60'tan fazla model vardır; liste bir başlangıçtır. Her sa�
 
 Seslendirme OpenAI ya da Gemini anahtarınızla, macOS'ta ayrıca bilgisayarın yerleşik sesiyle yapılır. Arka plan silme ve bölge düzenleme bağlı görsel modelinizi kullanır; 2× büyütme anahtarsız, bu bilgisayarda çalışır.
 
+## Hesaplar ve takım
+
+Bellek hesapla açılır. İlk açılışta bir **takım sahibi** hesabı oluşturursunuz; var olan hafıza, kütüphane ve sohbetler olduğu gibi kalır ve bu hesabın olur.
+
+- **Üye eklemek:** Ayarlar → Takım → **Üye ekle**. E-postayı ve ilk şifreyi siz belirlersiniz; Bellek size üyeye iletilecek bir **davet bağlantısı** verir. Üye bağlantıyı açıp verdiğiniz şifreyle girer, adını yazar, isterse profil resmi ekler ve **kendi şifresini belirleyip** doğrudan takımınıza katılır. Verdiğiniz şifre yalnızca ilk giriş içindir; üye kendi şifresini koymadan stüdyoya giremez. Bir üyenin şifresini sıfırladığınızda da aynı kural işler.
+- **Yetkiler:** Her üyeye hazır bir rol (Yönetici, Editör, İzleyici) verir ya da yetkileri tek tek açıp kapatırsınız: üretim yapabilir mi, hafızadan ve kütüphaneden silebilir mi, bağlı yapay zekâları ve API anahtarlarını görebilir mi, harcamayı, yedekleri, çöp kutusunu ve takımı yönetebilir mi. Yetkiler sunucuda denetlenir; değişiklik anında geçerli olur.
+- **Harcama:** Her üretim onu başlatan üyeye yazılır. Ayarlar → Kullanım'da kimin bu ay ne kadar harcadığını görür, üye başına aylık sınır koyarsınız. Sınırına ulaşan üyenin yeni üretimleri durur; diğerleri etkilenmez. Takımın genel sınırı ayrıca geçerlidir.
+- **Kim üretti:** Kütüphanede her dosyanın köşesinde onu üreten ya da yükleyen üyenin resmi görünür; listeyi üyeye göre süzebilirsiniz.
+- **Sohbetler kişiseldir:** Herkes kendi sohbetlerini görür. “Herkesin sohbetlerini görebilir” yetkisi okuma verir; başkasının sohbetine yalnızca takım sahibi yazabilir. Hafıza, kütüphane ve içerikler takımın ortak malıdır.
+- **Güvenlik:** Şifreler tuzlanmış scrypt özeti olarak saklanır; API anahtarlarının tamamı hiçbir üyeye gösterilmez. Hatalı giriş denemeleri sınırlanır. Üyenin şifresini sıfırlayabilir, hesabını kapatabilir ya da takımdan çıkarabilirsiniz (sohbetleri size devredilir). Ayarlar → Takım → **Etkinlik** kimin ne zaman giriş yaptığını, neyi sildiğini, hangi yetkinin ve anahtarın değiştiğini gösterir.
+- **Yedekten dönmek hesapları değiştirmez:** Eski bir yedeğe döndüğünüzde ya da arşiv içe aktardığınızda içerik değişir, hesaplar ve oturumlar şimdiki hâliyle kalır.
+
+Takım arkadaşlarınızın kendi bilgisayarlarından girebilmesi için Bellek'i ağa açık başlatın: `HOST=0.0.0.0 npm start`. Girecekleri adres Ayarlar → Takım'da yazar.
+
 ## Ortam değişkenleri
 
 | Değişken | Anlamı |
 | --- | --- |
 | `PORT` | Sunucu portu (varsayılan 8787) |
 | `HOST` | Dinlenecek adres (varsayılan `127.0.0.1`). Ağda paylaşmak için `0.0.0.0` |
-| `BELLEK_PASSWORD` | Verilirse arayüz ve API bu parolayla korunur. Ağa açarken mutlaka verin |
+| `BELLEK_PASSWORD` | Kurulum kodu. İlk hesap normalde yalnızca Bellek'in çalıştığı bilgisayardan açılır; bu değer verilirse ilk hesap başka bir bilgisayardan da bu kodla açılabilir. Hesap açıldıktan sonra kullanılmaz |
 | `BELLEK_DATA_DIR` | Veri klasörünü başka bir yere taşır |
 | `BELLEK_MOCK=1` | Anahtarsız deneme sağlayıcısını açar; sahte çıktılarla tüm akışı sınamak içindir |
 
@@ -93,10 +107,10 @@ Seslendirme OpenAI ya da Gemini anahtarınızla, macOS'ta ayrıca bilgisayarın 
 
 Onay bağlantıları Bellek'in kendi sunucusundan açılır. Varsayılan kurulumda Bellek yalnızca bu bilgisayarı dinler; bağlantı da yalnızca bu bilgisayarda çalışır. Başkasına göndermek için iki yol var:
 
-- **Aynı ağdaki biri:** Bellek'i `HOST=0.0.0.0 BELLEK_PASSWORD=<parola> npm start` ile başlatın ve bağlantıdaki `127.0.0.1` yerine bilgisayarınızın ağ adresini yazın.
-- **İnternetteki biri:** Bellek'i bir tünelle (Cloudflare Tunnel, Tailscale Funnel, ngrok) dışarı açın ve bağlantının başındaki adresi tünel adresiyle değiştirin. Parolayı mutlaka verin.
+- **Aynı ağdaki biri:** Bellek'i `HOST=0.0.0.0 npm start` ile başlatın ve bağlantıdaki `127.0.0.1` yerine bilgisayarınızın ağ adresini yazın.
+- **İnternetteki biri:** Bellek'i bir tünelle (Cloudflare Tunnel, Tailscale Funnel, ngrok) dışarı açın ve bağlantının başındaki adresi tünel adresiyle değiştirin. Önce takım sahibi hesabını bu bilgisayardan oluşturmuş olun.
 
-Parola stüdyoyu korur; onay sayfası bilerek parolasızdır, çünkü müşterinizin hesabı yoktur. Bağlantıdaki uzun anahtar yalnızca o tek gönderiyi ve görsellerini açar, tahmin edilemez ve **Bağlantıyı kapat** ile anında geçersiz olur.
+Stüdyoyu hesaplar korur; onay sayfası bilerek hesapsızdır, çünkü müşterinizin hesabı yoktur. Bağlantıdaki uzun anahtar yalnızca o tek gönderiyi ve görsellerini açar, tahmin edilemez ve **Bağlantıyı kapat** ile anında geçersiz olur.
 
 ## Bilinen sınırlar
 

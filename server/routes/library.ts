@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import multer from 'multer';
 import path from 'node:path';
 import sharp from 'sharp';
+import { can } from '../../shared/permissions.ts';
 import type { Asset, AssetSource, DetectedPerson, EntityAssetRole, PeopleDetection } from '../../shared/types.ts';
 import { detectPeople } from '../ai/tasks.ts';
 import { paths } from '../config.ts';
@@ -15,6 +16,9 @@ import { Invalid, NotFound, linkAssets, unlinkAsset } from '../repo/entities.ts'
 import {
   UploadError, assetFilePath, getAsset, getAssetRow, hydrateAssets, ingest, thumbFilePath,
 } from '../storage.ts';
+import { triggerIntegrationEvent } from '../integrations.ts';
+import { actorOf, assertAny, assertCan, need, needAny } from '../middleware/auth.ts';
+import { logActivity } from '../repo/teams.ts';
 
 export const upload = multer({
   storage: multer.diskStorage({
@@ -100,6 +104,7 @@ mediaRouter.get('/:id/download', (req, res) => {
 // ───────────────────────── Kütüphane ─────────────────────────
 
 libraryRouter.get('/', (req, res) => {
+  if (query(req, 'trashed') === '1') assertAny(req, 'trash.manage', 'library.delete');
   const where: string[] = [query(req, 'trashed') === '1' ? 'deleted_at IS NOT NULL' : 'deleted_at IS NULL'];
   const params: unknown[] = [];
   const kind = query(req, 'kind');
@@ -114,6 +119,11 @@ libraryRouter.get('/', (req, res) => {
     params.push(source);
   }
   if (query(req, 'favorite') === '1') where.push('favorite = 1');
+  const member = query(req, 'user');
+  if (member) {
+    where.push('user_id = ?');
+    params.push(member);
+  }
   const entity = query(req, 'entity');
   if (entity) {
     where.push(`(id IN (SELECT asset_id FROM entity_assets WHERE entity_id = ?)
@@ -143,7 +153,7 @@ libraryRouter.get('/', (req, res) => {
   });
 });
 
-libraryRouter.post('/', upload.array('files', 300), async (req, res) => {
+libraryRouter.post('/', needAny('library.edit', 'studio.generate', 'content.edit'), upload.array('files', 300), async (req, res) => {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
   if (!files.length) throw new UploadError('Yüklenecek dosya seçilmedi.');
   const body = req.body as Record<string, string | undefined>;
@@ -161,6 +171,8 @@ libraryRouter.post('/', upload.array('files', 300), async (req, res) => {
           title: body.title || null,
           parentId: body.parentId || null,
           prompt: body.prompt || null,
+          // Dosya yüklemesi akış olaylarıyla ilerler; üye bağlamdan değil istekten alınır.
+          userId: actorOf(req).id,
         }),
       );
     } catch (error) {
@@ -168,10 +180,11 @@ libraryRouter.post('/', upload.array('files', 300), async (req, res) => {
       await fsp.rm(file.path, { force: true });
     }
   }
-  if (body.entityId && assets.length) {
+  if (body.entityId && assets.length && can(actorOf(req), 'memory.edit')) {
     linkAssets(body.entityId, assets.map((a) => a.id), (body.role as EntityAssetRole) || 'reference');
   }
   emit({ type: 'asset.changed' });
+  for (const a of assets) void triggerIntegrationEvent('asset.created', { assetId: a.id, asset: a });
   res.status(assets.length ? 201 : 400).json({ assets: assets.map((a) => getAsset(a.id)!), errors });
 });
 
@@ -181,7 +194,7 @@ libraryRouter.get('/:id', (req, res) => {
   res.json(asset);
 });
 
-libraryRouter.patch('/:id', (req, res) => {
+libraryRouter.patch('/:id', need('library.edit'), (req, res) => {
   const row = getAssetRow(req.params.id);
   if (!row) throw new NotFound('Görsel bulunamadı.');
   const body = req.body as { title?: string | null; favorite?: boolean; tags?: string[] };
@@ -196,9 +209,12 @@ libraryRouter.patch('/:id', (req, res) => {
   res.json(getAsset(req.params.id));
 });
 
-libraryRouter.delete('/:id', (req, res) => {
+libraryRouter.delete('/:id', need('library.delete'), (req, res) => {
+  const asset = getAsset(req.params.id);
   run(`UPDATE assets SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, now(), req.params.id);
   emit({ type: 'asset.changed' });
+  if (asset && !asset.deletedAt) logActivity(actorOf(req), 'asset.delete', `Kütüphaneden “${asset.title || asset.filename}” dosyasını sildi.`);
+  if (asset) void triggerIntegrationEvent('asset.deleted', { assetId: req.params.id, asset });
   res.json({ ok: true });
 });
 
@@ -208,21 +224,29 @@ libraryRouter.post('/bulk', (req, res) => {
   if (!ids.length) return res.json({ ok: true, count: 0 });
   const marks = ids.map(() => '?').join(',');
   switch (body.action) {
-    case 'delete':
-      run(`UPDATE assets SET deleted_at = ? WHERE id IN (${marks}) AND deleted_at IS NULL`, now(), ...ids);
+    case 'delete': {
+      assertCan(req, 'library.delete');
+      const { changes } = run(`UPDATE assets SET deleted_at = ? WHERE id IN (${marks}) AND deleted_at IS NULL`, now(), ...ids);
+      if (changes) logActivity(actorOf(req), 'asset.delete', `Kütüphaneden ${changes} dosya sildi.`);
       break;
+    }
     case 'restore':
+      // Silen kişi "Geri al" diyebilmeli; çöp kutusunu yöneten de geri getirebilir.
+      assertAny(req, 'library.delete', 'trash.manage');
       run(`UPDATE assets SET deleted_at = NULL WHERE id IN (${marks})`, ...ids);
       break;
     case 'favorite':
     case 'unfavorite':
+      assertCan(req, 'library.edit');
       run(`UPDATE assets SET favorite = ? WHERE id IN (${marks})`, body.action === 'favorite', ...ids);
       break;
     case 'link':
+      assertCan(req, 'memory.edit');
       if (!body.entityId) throw new UploadError('Bir varlık seçin.');
       linkAssets(body.entityId, ids, body.role ?? 'reference');
       break;
     case 'unlink':
+      assertCan(req, 'memory.edit');
       if (!body.entityId) throw new UploadError('Bir varlık seçin.');
       for (const id of ids) unlinkAsset(body.entityId, id);
       break;
@@ -236,7 +260,7 @@ libraryRouter.post('/bulk', (req, res) => {
 const TOOL_OPS = ['inpaint', 'remove-bg', 'upscale'] as const;
 
 /** Görsel araçları: bölge düzenleme, arka plan silme, büyütme. Sonuç yeni bir görseldir; özgün dosya değişmez. */
-libraryRouter.post('/:id/tools', async (req, res) => {
+libraryRouter.post('/:id/tools', need('studio.generate'), async (req, res) => {
   const body = req.body as { op?: string; prompt?: string; mask?: string; modelRef?: string | null };
   const op = TOOL_OPS.find((item) => item === body.op);
   if (!op) throw new UploadError('Bu araç tanınmıyor.');
@@ -259,7 +283,7 @@ const detections = new Map<string, { local?: DetectedPerson[] | null; model?: De
  * Görseldeki kişileri bulur. Önce bu bilgisayardaki ücretsiz algılayıcı denenir;
  * o bir şey bulamazsa ve `allowModel` verilmişse bağlı yapay zekâ modeline sorulur.
  */
-libraryRouter.post('/:id/detect', async (req, res) => {
+libraryRouter.post('/:id/detect', needAny('memory.edit', 'studio.generate'), async (req, res) => {
   const row = getAssetRow(req.params.id);
   if (!row || row.deleted_at) throw new NotFound('Görsel bulunamadı.');
   if (row.kind !== 'image') throw new Invalid('Kişi seçimi yalnızca görsellerde yapılır.');

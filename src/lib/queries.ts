@@ -30,8 +30,9 @@ export const keys = {
   voices: ['voices'] as const,
 };
 
-export function useBootstrap() {
-  return useQuery({ queryKey: keys.bootstrap, queryFn: () => api.get<Bootstrap>('/api/bootstrap'), staleTime: 60_000 });
+/** `enabled` kapalıyken (oturum yokken) açılış verisi istenmez. */
+export function useBootstrap(enabled = true) {
+  return useQuery({ queryKey: keys.bootstrap, enabled, queryFn: () => api.get<Bootstrap>('/api/bootstrap'), staleTime: 60_000 });
 }
 
 /** Açılış verisi yüklendikten sonra kullanılır; kabuk bunu garanti eder. */
@@ -96,6 +97,8 @@ export interface AssetFilter {
   favorite?: boolean;
   q?: string;
   trashed?: boolean;
+  /** Yalnızca bu üyenin ürettiği ya da yüklediği dosyalar. */
+  user?: string;
 }
 
 interface AssetPage {

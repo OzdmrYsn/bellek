@@ -6,6 +6,7 @@ import { api } from '../lib/api.ts';
 import { timeAgo } from '../lib/format.ts';
 import { keys, queryClient, useApp, useDesigns } from '../lib/queries.ts';
 import { attempt, toast } from '../lib/store.ts';
+import { useCan } from '../lib/auth.ts';
 import { Dialog } from '../ui/Dialog.tsx';
 import { Empty, Field, PageHeader, PageLoader } from '../ui/kit.tsx';
 import { Menu } from '../ui/Popover.tsx';
@@ -94,6 +95,7 @@ function NewDesignDialog({ open, onClose }: { open: boolean; onClose: () => void
 
 export default function DesignsPage() {
   const designs = useDesigns();
+  const canDelete = useCan('content.delete');
   const [creating, setCreating] = useState(false);
   const items = designs.data ?? [];
 
@@ -146,7 +148,7 @@ export default function DesignsPage() {
                     </div>
                   </div>
                 </Link>
-                <div className="absolute top-2 right-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+                {canDelete && <div className="absolute top-2 right-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
                   <Menu
                     trigger={(props) => (
                       <button type="button" {...props} aria-label="Tasarım seçenekleri" className="grid h-7 w-7 place-items-center rounded-md bg-black/60 text-white hover:bg-black/80">
@@ -155,7 +157,7 @@ export default function DesignsPage() {
                     )}
                     items={[{ label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void remove(design) }]}
                   />
-                </div>
+                </div>}
               </div>
             ))}
           </div>

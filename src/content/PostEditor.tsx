@@ -10,6 +10,7 @@ import { api } from '../lib/api.ts';
 import { copyText, cx, toLocalInput } from '../lib/format.ts';
 import { keys, queryClient, useApp, usePost } from '../lib/queries.ts';
 import { attempt, pickAssets, toast, useUI } from '../lib/store.ts';
+import { can } from '../../shared/permissions.ts';
 import { downloadAsset, useAssetActions } from '../library/actions.ts';
 import { MentionInput } from '../studio/MentionInput.tsx';
 import { fullCaption, generatePostImage, usePostJobActive } from '../studio/PostCard.tsx';
@@ -264,7 +265,7 @@ export function PostEditorPage() {
             { label: 'Tasarımı düzenle', icon: <LayoutTemplate />, onSelect: () => navigate(`/tasarim/${post.designId}`), hidden: !post.designId },
             { label: post.designId ? 'Görselden yeni tasarım' : 'Tasarım editöründe aç', icon: <LayoutTemplate />, onSelect: () => post.assets[0] && void act.toDesign(post.assets[0]), hidden: post.assets[0]?.kind !== 'image' },
             'divider',
-            { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void remove() },
+            { label: 'Çöp kutusuna taşı', icon: <Trash2 />, danger: true, onSelect: () => void remove(), hidden: !can(app.me, 'content.delete') },
           ]}
         />
       </header>
